@@ -10,12 +10,12 @@
     "scripts"
   ],
   "scripts": {
-    "dev": "tsx server.ts",
+    "dev": "npx tsx server.ts",
     "build": "vite build --config artifacts/attendwise/vite.config.ts",
-    "start": "tsx server.ts",
+    "start": "npx tsx server.ts",
     "lint": "tsc -p tsconfig.json --noEmit",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "tsx scripts/test-analytics.ts && tsx scripts/test-persistence.ts"
+    "test": "npx tsx scripts/test-analytics.ts && npx tsx scripts/test-persistence.ts"
   },
   "dependencies": {
     "cors": "^2.8.5",
