@@ -1,0 +1,51 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Health and connection check
+    match /test/{docId} {
+      allow read: if true;
+    }
+
+    // Default deny for unspecified root collections
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Student user root and all subcollections
+    match /users/{uid} {
+      allow read, write: if request.auth != null && request.auth.uid == uid;
+
+      // Student's subjects
+      match /subjects/{subjectId} {
+        allow read, write: if request.auth != null && request.auth.uid == uid;
+      }
+
+      // Student's timetable
+      match /timetableEntries/{entryId} {
+        allow read, write: if request.auth != null && request.auth.uid == uid;
+      }
+
+      // Student's class sessions (Permanent locking of Present and ERP records)
+      match /classSessions/{sessionId} {
+        allow read: if request.auth != null && request.auth.uid == uid;
+        allow create: if request.auth != null && request.auth.uid == uid;
+        allow update: if request.auth != null && request.auth.uid == uid
+          // Present is strictly immutable: once marked Present, it can never be changed to Absent or Upcoming
+          && (!('personalStatus' in resource.data) || resource.data.personalStatus != 'present' || request.resource.data.personalStatus == 'present')
+          // Once ERP status is recorded, it is locked and cannot be changed or overwritten
+          && (!('erpStatus' in resource.data) || resource.data.erpStatus == null || request.resource.data.erpStatus == resource.data.erpStatus);
+        allow delete: if request.auth != null && request.auth.uid == uid;
+      }
+
+      // Student's attendance events
+      match /attendanceEvents/{eventId} {
+        allow read, write: if request.auth != null && request.auth.uid == uid;
+      }
+
+      // Student's photo evidence metadata
+      match /evidenceMetadata/{evidenceId} {
+        allow read, write: if request.auth != null && request.auth.uid == uid;
+      }
+    }
+  }
+}

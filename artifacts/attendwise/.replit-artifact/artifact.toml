@@ -1,0 +1,28 @@
+kind = "web"
+previewPath = "/"
+title = "AttendWise"
+description = "A responsive demo attendance companion for college students to manage their personal timetable, class sessions, attendance history, and manual ERP comparisons."
+version = "1.0.0"
+id = "artifacts/attendwise"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 20513
+
+[services.development]
+run = "pnpm --filter @workspace/attendwise run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/attendwise", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/attendwise/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "20513"
+BASE_PATH = "/"

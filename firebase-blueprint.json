@@ -1,0 +1,159 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Authenticated student user profile",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "displayName": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "timezone": { "type": "string" },
+        "attendanceTarget": { "type": "number" },
+        "institution": { "type": "string" },
+        "course": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "email", "timezone", "attendanceTarget"]
+    },
+    "Subject": {
+      "title": "Subject",
+      "description": "Academic subject for the student",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "studentId": { "type": "string" },
+        "code": { "type": "string" },
+        "name": { "type": "string" },
+        "category": { "type": "string", "enum": ["Theory", "Practical"] },
+        "teacherName": { "type": "string" },
+        "iconKey": { "type": "string" },
+        "reviewNeeded": { "type": "boolean" },
+        "isSpecialTraining": { "type": "boolean" },
+        "totalScheduledSessions": { "type": "number" },
+        "trainingStartDate": { "type": "string" },
+        "trainingEndDate": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "studentId", "name", "category"]
+    },
+    "TimetableEntry": {
+      "title": "TimetableEntry",
+      "description": "Weekly recurring timetable class slot",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "studentId": { "type": "string" },
+        "subjectId": { "type": "string" },
+        "subjectName": { "type": "string" },
+        "subjectCode": { "type": "string" },
+        "slot": { "type": "string" },
+        "dayOfWeek": { "type": "number" },
+        "startTime": { "type": "string" },
+        "endTime": { "type": "string" },
+        "category": { "type": "string", "enum": ["Theory", "Practical"] },
+        "teacherName": { "type": "string" },
+        "room": { "type": "string" },
+        "active": { "type": "boolean" },
+        "sourceId": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "studentId", "subjectId", "dayOfWeek", "startTime", "endTime", "category", "active"]
+    },
+    "ClassSession": {
+      "title": "ClassSession",
+      "description": "Specific dated class session generated from timetable",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "studentId": { "type": "string" },
+        "subjectId": { "type": "string" },
+        "subjectName": { "type": "string" },
+        "subjectCode": { "type": "string" },
+        "timetableEntryId": { "type": "string" },
+        "slot": { "type": "string" },
+        "scheduledDate": { "type": "string", "format": "date-time" },
+        "scheduledStartAt": { "type": "string", "format": "date-time" },
+        "scheduledEndAt": { "type": "string", "format": "date-time" },
+        "category": { "type": "string", "enum": ["Theory", "Practical"] },
+        "room": { "type": "string" },
+        "personalStatus": { "type": "string", "enum": ["upcoming", "present", "absent", "cancelled", "frozen", "unmarked"] },
+        "erpStatus": { "type": "string", "enum": ["Present", "Absent"] },
+        "erpRecordedAt": { "type": "string", "format": "date-time" },
+        "note": { "type": "string" },
+        "absentType": { "type": "string", "enum": ["manual_student", "automatic_overdue"] },
+        "canMarkPresent": { "type": "boolean" },
+        "finalized": { "type": "boolean" },
+        "finalizedAt": { "type": "string", "format": "date-time" },
+        "frozenAt": { "type": "string", "format": "date-time" },
+        "serverReceiptAt": { "type": "string", "format": "date-time" },
+        "clientCaptureAt": { "type": "string", "format": "date-time" },
+        "cancelledAt": { "type": "string", "format": "date-time" },
+        "evidenceAvailable": { "type": "boolean" },
+        "evidenceStoragePath": { "type": "string" },
+        "photoDataUrl": { "type": "string" },
+        "academicDayNumber": { "type": "number" },
+        "isSpecialTraining": { "type": "boolean" },
+        "trainingProgram": { "type": "string" },
+        "previousPersonalStatus": { "type": "string" },
+        "previousErpStatus": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "studentId", "subjectId", "scheduledDate", "scheduledStartAt", "scheduledEndAt", "category", "personalStatus", "finalized"]
+    },
+    "AttendanceEvent": {
+      "title": "AttendanceEvent",
+      "description": "Authoritative audit log of attendance lifecycle events",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "sessionId": { "type": "string" },
+        "eventType": { "type": "string" },
+        "serverTimestamp": { "type": "string", "format": "date-time" },
+        "message": { "type": "string" }
+      },
+      "required": ["id", "sessionId", "eventType", "serverTimestamp", "message"]
+    },
+    "EvidenceMetadata": {
+      "title": "EvidenceMetadata",
+      "description": "Private student photo evidence metadata reference",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "sessionId": { "type": "string" },
+        "storagePath": { "type": "string" },
+        "clientCapturedAt": { "type": "string", "format": "date-time" },
+        "uploadedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "sessionId", "storagePath", "uploadedAt"]
+    }
+  },
+  "firestore": {
+    "/users/{uid}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Student root profile document"
+    },
+    "/users/{uid}/subjects/{subjectId}": {
+      "schema": { "$ref": "#/entities/Subject" },
+      "description": "Subjects configured for this student"
+    },
+    "/users/{uid}/timetableEntries/{entryId}": {
+      "schema": { "$ref": "#/entities/TimetableEntry" },
+      "description": "Weekly recurring timetable slots"
+    },
+    "/users/{uid}/classSessions/{sessionId}": {
+      "schema": { "$ref": "#/entities/ClassSession" },
+      "description": "Class sessions for tracking attendance"
+    },
+    "/users/{uid}/attendanceEvents/{eventId}": {
+      "schema": { "$ref": "#/entities/AttendanceEvent" },
+      "description": "Attendance event audit logs"
+    },
+    "/users/{uid}/evidenceMetadata/{evidenceId}": {
+      "schema": { "$ref": "#/entities/EvidenceMetadata" },
+      "description": "Photo evidence reference metadata"
+    }
+  }
+}

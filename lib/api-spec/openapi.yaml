@@ -1,0 +1,756 @@
+openapi: 3.1.0
+info:
+  # Do not change the title: generated import paths depend on it.
+  title: Api
+  version: 0.1.0
+  description: AttendWise demo API. The single-user in-memory demo resets when the server restarts.
+servers:
+  - url: /api
+    description: Shared API service
+tags:
+  - name: health
+  - name: demo
+  - name: dashboard
+  - name: subjects
+  - name: timetable
+  - name: sessions
+  - name: attendance
+paths:
+  /healthz:
+    get:
+      operationId: healthCheck
+      tags: [health]
+      summary: Check API health
+      responses:
+        "200":
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+  /demo/session:
+    post:
+      operationId: startDemoSession
+      tags: [demo]
+      summary: Start the fixed demo student context
+      responses:
+        "200":
+          description: Demo context is active
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DemoSessionResult"
+    delete:
+      operationId: endDemoSession
+      tags: [demo]
+      summary: Exit the demo student context
+      responses:
+        "200":
+          description: Demo context is inactive
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DemoSessionResult"
+  /demo/profile:
+    get:
+      operationId: getDemoProfile
+      tags: [demo]
+      summary: Get the demo student profile
+      responses:
+        "200":
+          description: Demo student profile
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StudentProfile"
+  /dashboard/summary:
+    get:
+      operationId: getDashboardSummary
+      tags: [dashboard]
+      summary: Get aggregate attendance metrics and target
+      responses:
+        "200":
+          description: Calculated dashboard summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DashboardSummary"
+  /dashboard/today:
+    get:
+      operationId: getDashboardToday
+      tags: [dashboard]
+      summary: Get today's classes in India Standard Time
+      responses:
+        "200":
+          description: Today's scheduled sessions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TodayDashboard"
+  /subjects:
+    get:
+      operationId: listSubjects
+      tags: [subjects]
+      summary: List the demo student's subjects
+      responses:
+        "200":
+          description: Subjects
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Subject"
+    post:
+      operationId: createSubject
+      tags: [subjects]
+      summary: Create a subject
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SubjectInput"
+      responses:
+        "201":
+          description: Subject created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Subject"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+  /subjects/{subjectId}:
+    parameters:
+      - name: subjectId
+        in: path
+        required: true
+        schema:
+          type: string
+    patch:
+      operationId: updateSubject
+      tags: [subjects]
+      summary: Update a subject
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SubjectUpdate"
+      responses:
+        "200":
+          description: Updated subject
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Subject"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      operationId: deleteSubject
+      tags: [subjects]
+      summary: Delete a subject and its future timetable entries
+      responses:
+        "204":
+          description: Subject deleted
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /timetable:
+    get:
+      operationId: listTimetable
+      tags: [timetable]
+      summary: List recurring Monday-to-Saturday timetable entries
+      responses:
+        "200":
+          description: Timetable entries
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/TimetableEntry"
+    post:
+      operationId: createTimetableEntry
+      tags: [timetable]
+      summary: Add a recurring timetable entry
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TimetableInput"
+      responses:
+        "201":
+          description: Timetable entry created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TimetableEntry"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /timetable/{entryId}:
+    parameters:
+      - name: entryId
+        in: path
+        required: true
+        schema:
+          type: string
+    patch:
+      operationId: updateTimetableEntry
+      tags: [timetable]
+      summary: Update a recurring timetable entry
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TimetableUpdate"
+      responses:
+        "200":
+          description: Updated timetable entry
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TimetableEntry"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+    delete:
+      operationId: deleteTimetableEntry
+      tags: [timetable]
+      summary: Delete a recurring timetable entry
+      responses:
+        "204":
+          description: Timetable entry deleted
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /sessions:
+    get:
+      operationId: listSessions
+      tags: [sessions]
+      summary: List generated class sessions
+      parameters:
+        - name: from
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date
+        - name: to
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date
+        - name: subjectId
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: category
+          in: query
+          required: false
+          schema:
+            $ref: "#/components/schemas/SubjectCategory"
+        - name: personalStatus
+          in: query
+          required: false
+          schema:
+            $ref: "#/components/schemas/PersonalStatus"
+      responses:
+        "200":
+          description: Sessions
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ClassSession"
+  /sessions/{sessionId}:
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      operationId: getSession
+      tags: [sessions]
+      summary: Get one class session
+      responses:
+        "200":
+          description: Session detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClassSession"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /sessions/{sessionId}/mark-present:
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      operationId: markPresent
+      tags: [sessions]
+      summary: Mark a session present during its exact scheduled interval
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MarkPresentInput"
+      responses:
+        "200":
+          description: Present mark accepted with server receipt time
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClassSession"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/BusinessRuleError"
+  /sessions/{sessionId}/erp-status:
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      operationId: recordErpStatus
+      tags: [sessions]
+      summary: Record the status manually observed in the college ERP
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ErpStatusInput"
+      responses:
+        "200":
+          description: ERP status recorded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClassSession"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /sessions/{sessionId}/cancel:
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      operationId: cancelSession
+      tags: [sessions]
+      summary: Cancel an eligible session without counting it as absent
+      responses:
+        "200":
+          description: Session cancelled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClassSession"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /sessions/{sessionId}/events:
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      operationId: listSessionEvents
+      tags: [sessions]
+      summary: Get the event history for a session
+      responses:
+        "200":
+          description: Session events
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AttendanceEvent"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /attendance/history:
+    get:
+      operationId: getAttendanceHistory
+      tags: [attendance]
+      summary: Get filtered chronological attendance history
+      parameters:
+        - name: subjectId
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: from
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date
+        - name: to
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date
+        - name: category
+          in: query
+          required: false
+          schema:
+            $ref: "#/components/schemas/SubjectCategory"
+        - name: personalStatus
+          in: query
+          required: false
+          schema:
+            $ref: "#/components/schemas/PersonalStatus"
+        - name: comparisonStatus
+          in: query
+          required: false
+          schema:
+            $ref: "#/components/schemas/ComparisonStatus"
+      responses:
+        "200":
+          description: Filtered attendance history
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ClassSession"
+  /attendance/subjects:
+    get:
+      operationId: getSubjectAttendance
+      tags: [attendance]
+      summary: Get calculated attendance totals for each subject
+      responses:
+        "200":
+          description: Subject attendance metrics
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/SubjectAttendance"
+  /attendance/comparison:
+    get:
+      operationId: getErpComparison
+      tags: [attendance]
+      summary: Compare personal and manually entered ERP attendance
+      responses:
+        "200":
+          description: Personal attendance and ERP comparison
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ComparisonSummary"
+components:
+  responses:
+    BadRequest:
+      description: Invalid input
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    Conflict:
+      description: Invalid state transition or overlapping timetable
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    BusinessRuleError:
+      description: Business rule rejected the operation
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+  schemas:
+    HealthStatus:
+      type: object
+      properties:
+        status:
+          type: string
+      required: [status]
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+      required: [error]
+    SubjectCategory:
+      type: string
+      enum: [Theory, Practical]
+    PersonalStatus:
+      type: string
+      enum: [upcoming, present, absent, cancelled]
+    ErpStatus:
+      type: string
+      enum: [Present, Absent]
+    ComparisonStatus:
+      type: string
+      enum: [match, potential_discrepancy, erp_not_entered]
+    StudentProfile:
+      type: object
+      properties:
+        id: { type: string }
+        displayName: { type: string }
+        email: { type: string, format: email }
+        timezone: { type: string }
+        attendanceTarget: { type: number, minimum: 0, maximum: 100 }
+        createdAt: { type: string, format: date-time }
+      required: [id, displayName, email, timezone, attendanceTarget, createdAt]
+    DemoSessionResult:
+      type: object
+      properties:
+        active: { type: boolean }
+        profile:
+          $ref: "#/components/schemas/StudentProfile"
+      required: [active, profile]
+    Subject:
+      type: object
+      properties:
+        id: { type: string }
+        studentId: { type: string }
+        name: { type: string }
+        category:
+          $ref: "#/components/schemas/SubjectCategory"
+        iconKey: { type: string }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+      required: [id, studentId, name, category, iconKey, createdAt, updatedAt]
+    SubjectInput:
+      type: object
+      properties:
+        name: { type: string, minLength: 1, maxLength: 80 }
+        category:
+          $ref: "#/components/schemas/SubjectCategory"
+        iconKey: { type: string, maxLength: 32 }
+      required: [name, category]
+    SubjectUpdate:
+      type: object
+      properties:
+        name: { type: string, minLength: 1, maxLength: 80 }
+        category:
+          $ref: "#/components/schemas/SubjectCategory"
+        iconKey: { type: string, maxLength: 32 }
+    TimetableEntry:
+      type: object
+      properties:
+        id: { type: string }
+        studentId: { type: string }
+        subjectId: { type: string }
+        subjectName: { type: string }
+        dayOfWeek: { type: integer, minimum: 1, maximum: 6 }
+        startTime: { type: string, pattern: "^([01][0-9]|2[0-3]):[0-5][0-9]$" }
+        endTime: { type: string, pattern: "^([01][0-9]|2[0-3]):[0-5][0-9]$" }
+        category:
+          $ref: "#/components/schemas/SubjectCategory"
+        room:
+          type: [string, "null"]
+        active: { type: boolean }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+      required: [id, studentId, subjectId, subjectName, dayOfWeek, startTime, endTime, category, room, active, createdAt, updatedAt]
+    TimetableInput:
+      type: object
+      properties:
+        subjectId: { type: string }
+        dayOfWeek: { type: integer, minimum: 1, maximum: 6 }
+        startTime: { type: string, pattern: "^([01][0-9]|2[0-3]):[0-5][0-9]$" }
+        endTime: { type: string, pattern: "^([01][0-9]|2[0-3]):[0-5][0-9]$" }
+        category:
+          $ref: "#/components/schemas/SubjectCategory"
+        room:
+          type: [string, "null"]
+          maxLength: 80
+      required: [subjectId, dayOfWeek, startTime, endTime, category]
+    TimetableUpdate:
+      type: object
+      properties:
+        subjectId: { type: string }
+        dayOfWeek: { type: integer, minimum: 1, maximum: 6 }
+        startTime: { type: string, pattern: "^([01][0-9]|2[0-3]):[0-5][0-9]$" }
+        endTime: { type: string, pattern: "^([01][0-9]|2[0-3]):[0-5][0-9]$" }
+        category:
+          $ref: "#/components/schemas/SubjectCategory"
+        room:
+          type: [string, "null"]
+          maxLength: 80
+    ClassSession:
+      type: object
+      properties:
+        id: { type: string }
+        studentId: { type: string }
+        subjectId: { type: string }
+        subjectName: { type: string }
+        timetableEntryId:
+          type: [string, "null"]
+        scheduledDate: { type: string, format: date }
+        scheduledStartAt: { type: string, format: date-time }
+        scheduledEndAt: { type: string, format: date-time }
+        category:
+          $ref: "#/components/schemas/SubjectCategory"
+        room:
+          type: [string, "null"]
+        personalStatus:
+          $ref: "#/components/schemas/PersonalStatus"
+        erpStatus:
+          oneOf:
+            - $ref: "#/components/schemas/ErpStatus"
+            - type: "null"
+        canMarkPresent: { type: boolean }
+        finalized: { type: boolean }
+        finalizedAt:
+          type: [string, "null"]
+          format: date-time
+        serverReceiptAt:
+          type: [string, "null"]
+          format: date-time
+        clientCaptureAt:
+          type: [string, "null"]
+          format: date-time
+        cancelledAt:
+          type: [string, "null"]
+          format: date-time
+        evidenceAvailable: { type: boolean }
+        createdAt: { type: string, format: date-time }
+      required: [id, studentId, subjectId, subjectName, timetableEntryId, scheduledDate, scheduledStartAt, scheduledEndAt, category, room, personalStatus, erpStatus, canMarkPresent, finalized, finalizedAt, serverReceiptAt, clientCaptureAt, cancelledAt, evidenceAvailable, createdAt]
+    MarkPresentInput:
+      type: object
+      properties:
+        evidenceDataUrl:
+          type: string
+          maxLength: 2800000
+          description: Optional temporary camera-captured image data URL.
+        clientCapturedAt:
+          type: string
+          format: date-time
+          description: Optional client-reported capture time; not independently verified.
+    ErpStatusInput:
+      type: object
+      properties:
+        status:
+          $ref: "#/components/schemas/ErpStatus"
+      required: [status]
+    AttendanceEvent:
+      type: object
+      properties:
+        id: { type: string }
+        sessionId: { type: string }
+        eventType:
+          type: string
+          enum: [session_created, present_marked, session_finalized, erp_status_recorded, session_cancelled]
+        serverTimestamp: { type: string, format: date-time }
+        message: { type: string }
+      required: [id, sessionId, eventType, serverTimestamp, message]
+    AttendanceMetric:
+      type: object
+      properties:
+        percentage:
+          type: [number, "null"]
+          minimum: 0
+          maximum: 100
+        presentCount: { type: integer, minimum: 0 }
+        absentCount: { type: integer, minimum: 0 }
+        totalEligible: { type: integer, minimum: 0 }
+      required: [percentage, presentCount, absentCount, totalEligible]
+    DashboardSummary:
+      type: object
+      properties:
+        overall:
+          $ref: "#/components/schemas/AttendanceMetric"
+        theory:
+          $ref: "#/components/schemas/AttendanceMetric"
+        practical:
+          $ref: "#/components/schemas/AttendanceMetric"
+        erp:
+          $ref: "#/components/schemas/AttendanceMetric"
+        targetPercent: { type: number, minimum: 0, maximum: 100 }
+        erpNotEnteredCount: { type: integer, minimum: 0 }
+        upcomingCount: { type: integer, minimum: 0 }
+      required: [overall, theory, practical, erp, targetPercent, erpNotEnteredCount, upcomingCount]
+    TodayDashboard:
+      type: object
+      properties:
+        serverNow: { type: string, format: date-time }
+        sessions:
+          type: array
+          items:
+            $ref: "#/components/schemas/ClassSession"
+      required: [serverNow, sessions]
+    SubjectAttendance:
+      type: object
+      properties:
+        subjectId: { type: string }
+        subjectName: { type: string }
+        category:
+          $ref: "#/components/schemas/SubjectCategory"
+        iconKey: { type: string }
+        presentCount: { type: integer, minimum: 0 }
+        absentCount: { type: integer, minimum: 0 }
+        totalEligible: { type: integer, minimum: 0 }
+        percentage:
+          type: [number, "null"]
+          minimum: 0
+          maximum: 100
+        targetPercent: { type: number, minimum: 0, maximum: 100 }
+      required: [subjectId, subjectName, category, iconKey, presentCount, absentCount, totalEligible, percentage, targetPercent]
+    ComparisonEntry:
+      type: object
+      properties:
+        sessionId: { type: string }
+        subjectId: { type: string }
+        subjectName: { type: string }
+        category:
+          $ref: "#/components/schemas/SubjectCategory"
+        scheduledDate: { type: string, format: date }
+        personalStatus:
+          $ref: "#/components/schemas/PersonalStatus"
+        erpStatus:
+          oneOf:
+            - $ref: "#/components/schemas/ErpStatus"
+            - type: "null"
+        comparisonStatus:
+          $ref: "#/components/schemas/ComparisonStatus"
+      required: [sessionId, subjectId, subjectName, category, scheduledDate, personalStatus, erpStatus, comparisonStatus]
+    ComparisonSummary:
+      type: object
+      properties:
+        entries:
+          type: array
+          items:
+            $ref: "#/components/schemas/ComparisonEntry"
+        matchCount: { type: integer, minimum: 0 }
+        discrepancyCount: { type: integer, minimum: 0 }
+        erpNotEnteredCount: { type: integer, minimum: 0 }
+      required: [entries, matchCount, discrepancyCount, erpNotEnteredCount]

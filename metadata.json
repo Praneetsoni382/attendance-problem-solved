@@ -1,0 +1,5 @@
+{
+  "name": "AttendWise",
+  "description": "Student attendance companion and tracking application.",
+  "capabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

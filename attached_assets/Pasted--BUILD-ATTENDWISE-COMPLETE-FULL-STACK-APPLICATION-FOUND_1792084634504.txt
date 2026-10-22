@@ -1,0 +1,987 @@
+# BUILD ATTENDWISE — COMPLETE FULL-STACK APPLICATION FOUNDATION
+
+Act as a senior full-stack software architect, product designer, frontend engineer, backend engineer, and application security engineer.
+
+Build a working, responsive full-stack web application named **AttendWise** from scratch. This is a personal college attendance tracking application for students. I want a proper functional foundation with a professional frontend, a backend API, reusable components, well-defined business logic, and an architecture that can later be migrated to Firebase.
+
+Do not just create a static dashboard, a Figma-style prototype, or a collection of disconnected screens. Implement a real, navigable application with functioning forms, buttons, filters, attendance calculations, timetable management, class sessions, and demo data flowing through a backend service.
+
+Work systematically, inspect your implementation, run the application, and fix errors before considering the task complete.
+
+---
+
+# PART 1 — DEVELOPMENT CONSTRAINTS
+
+## 1.1 Development environment
+
+Build the initial application in Replit.
+
+Use this recommended stack unless the Replit environment has a compelling compatibility limitation:
+
+- Frontend: React with TypeScript.
+- Build tool: Vite.
+- Styling: Tailwind CSS.
+- Icons: Lucide React.
+- Routing: React Router.
+- Data fetching: a lightweight API client using fetch.
+- Backend: Node.js with Express and TypeScript.
+- Validation: Zod or an equivalent TypeScript-compatible validation library.
+- Date and time: use a reliable timezone-aware library where necessary.
+
+Keep the architecture simple enough for a student developer to understand and maintain.
+
+Do not introduce unnecessary frameworks, complex microservices, or large dependencies that do not add value to this MVP.
+
+## 1.2 No real authentication yet
+
+For this first development stage, implement a **demo-only student experience**.
+
+- Do not integrate Firebase Authentication yet.
+- Do not implement real email/password authentication.
+- Do not require actual account creation, email verification, password reset, or external identity providers.
+- Provide a demo entry screen with a button such as “Enter Demo Dashboard.”
+- When the user enters the demo, establish a clearly identified demo student context.
+- Provide a sign-out or exit-demo action that returns to the demo entry screen.
+- Keep the frontend authentication/context interface separate from the rest of the application so Firebase Authentication can replace it later.
+
+Do not claim that demo mode is secure authentication.
+
+Do not store real passwords or collect real credentials. Display a small “Demo Mode” indicator in the development version where appropriate.
+
+## 1.3 No database in this phase
+
+Do not use Supabase, PostgreSQL, MySQL, MongoDB, Firebase, or any external database at this stage.
+
+Implement a backend repository abstraction with an **in-memory demo repository** and realistic seeded data.
+
+Important behavior:
+
+- The backend API must be the main source of demo application data.
+- The frontend must not hardcode separate versions of attendance records or percentages.
+- Store demo records in the server-side repository while the server is running.
+- Clearly document that in-memory records reset when the server restarts.
+- Keep seeded data isolated from user-created demo records.
+- Do not silently pretend the data is permanently saved.
+- Design the repository interfaces so a future Firebase implementation can replace the in-memory repository without rewriting the entire frontend.
+
+Browser localStorage may be used for non-sensitive UI preferences only, such as sidebar state. Do not use it as the authoritative attendance database.
+
+## 1.4 Future Firebase compatibility
+
+The next development stage will use Firebase, including:
+
+- Firebase Authentication.
+- Cloud Firestore for application records.
+- Firebase Storage for private optional attendance photos.
+- Server-side authorization and validation.
+
+Do not install or configure Firebase now.
+
+Do not add Supabase, SQL migrations, database-specific queries, or Firebase credentials.
+
+Design clean interfaces such as `StudentContextProvider`, `AttendanceRepository`, `TimetableRepository`, `EvidenceStorage`, and `AttendanceService`.
+
+The future implementation should be able to replace demo implementations with Firebase implementations behind these interfaces.
+
+Keep all sensitive configuration server-side. Never design the application to expose privileged service credentials in the browser.
+
+---
+
+# PART 2 — PRODUCT PURPOSE
+
+AttendWise is a student-only personal attendance management application.
+
+Its purpose is to let a student:
+
+1. Maintain a personal record of attendance for each scheduled class.
+2. Define a weekly timetable from Monday through Saturday.
+3. Mark themselves Present during the exact scheduled class interval.
+4. Automatically finalize personal attendance as Absent if a valid Present entry was not recorded before the interval ended.
+5. Optionally capture a live photo when marking Present.
+6. Manually record the status shown by their college ERP.
+7. Compare their personal record with their manually recorded ERP record.
+8. Review attendance percentages, subject-wise statistics, history, and potential discrepancies.
+
+The application is a personal tracking and record-comparison tool. It is not an official attendance system, does not prove physical presence, and does not determine whether a college ERP record is incorrect.
+
+There are no teacher accounts, teacher approvals, administrative dashboards, or direct college ERP integrations.
+
+---
+
+# PART 3 — VISUAL DESIGN SYSTEM
+
+Use the attached AttendWise UI reference image as the primary visual direction.
+
+Reproduce its overall design language rather than copying every generated label literally.
+
+## 3.1 Design personality
+
+The interface must be:
+
+- Professional and trustworthy.
+- Friendly and comfortable for college students.
+- Modern, polished, and slightly decorative.
+- Easy to understand for a student who is not technically advanced.
+- Clean and functional, not crowded.
+- Consistent across all screens.
+
+Aim for a premium academic productivity SaaS application.
+
+Avoid the appearance of an outdated college ERP portal, a children's learning app, a gaming dashboard, or a generic unstyled admin template.
+
+## 3.2 Color palette
+
+Use a consistent design-token system:
+
+- Primary: deep indigo, approximately `#303779`.
+- Secondary: muted violet, approximately `#7777C8`.
+- Accent: mint green, approximately `#73CBA4`.
+- Background: soft cool off-white, approximately `#F5F6FB`.
+- Surface: white, approximately `#FFFFFF`.
+- Main text: dark navy, approximately `#20243A`.
+- Secondary text: muted slate.
+- Warning/discrepancy: amber.
+- Absent/error: restrained red.
+- Present/success: accessible green.
+
+These are initial design directions. Adjust shades when necessary for readable contrast and accessibility.
+
+Use CSS variables or centralized design tokens rather than scattering colors throughout components.
+
+## 3.3 Typography and components
+
+- Use Inter, Manrope, or a similar modern sans-serif font.
+- Use rounded cards with restrained shadows and subtle borders.
+- Use consistent corner radii, padding, and spacing.
+- Use Lucide icons with a consistent size and stroke style.
+- Use progress bars, badges, calendar icons, book icons, clocks, checklists, and subtle academic illustrations.
+- Apply decorative illustrations only where they improve the experience.
+- Make buttons, form fields, dropdowns, tables, modals, and status labels consistent.
+
+Do not use excessive gradients, neon colors, large illustrations, or unnecessary animation.
+
+Animations should be subtle and respect reduced-motion preferences.
+
+## 3.4 Layout
+
+Desktop:
+- Persistent left sidebar.
+- Top header with page title, date, and student context.
+- Main content area with well-spaced cards.
+- Consistent navigation and content width.
+
+Mobile:
+- Responsive layouts that fit narrow screens.
+- Collapsible navigation or bottom navigation.
+- Touch-friendly controls.
+- Cards that stack naturally.
+- Tables converted into readable compact rows or cards when needed.
+
+Do not simply shrink the desktop interface to fit a phone.
+
+---
+
+# PART 4 — APPLICATION NAVIGATION AND SCREENS
+
+Build all the following screens and make them accessible through functional navigation.
+
+## 4.1 Demo Entry / Welcome Screen
+
+Create a polished welcome screen with:
+
+- AttendWise logo and wordmark.
+- Headline: “Your attendance, organized.”
+- Supporting text: “Track your classes. Understand your attendance. Keep your records in one place.”
+- An academic illustration involving a calendar, notebook, checklist, or student workspace.
+- Primary button: “Enter Demo Dashboard.”
+- A small explanation that this is a demo experience and that data is temporary.
+
+The demo entry action must initialize or open the demo student context and navigate to the dashboard.
+
+Do not display real login fields or ask users for passwords.
+
+## 4.2 Main Dashboard
+
+This is the application's primary screen and must closely follow the attached dashboard reference.
+
+Header:
+- A personalized greeting such as “Good evening, Praneet.”
+- Supporting text: “Your academic attendance at a glance.”
+- Current date in IST.
+- Demo-mode indicator.
+
+Summary cards:
+1. Overall Personal Attendance.
+2. Theory Attendance.
+3. Practical Attendance.
+4. ERP Attendance.
+
+Each card must display:
+- Correct percentage.
+- Relevant icon.
+- Progress indicator.
+- A small supporting label.
+
+All numbers must be calculated from backend data, not independently hardcoded in the frontend.
+
+Below the summary cards, include:
+
+**Today's Classes**
+- Subject name.
+- Start and end times.
+- Theory or Practical label.
+- Class status.
+- Attendance action when the session is currently eligible.
+- A clear upcoming, present, finalized absent, or cancelled state.
+
+**Recent Attendance**
+- Recent class date and time.
+- Subject.
+- Personal status.
+- ERP status when recorded.
+- A link to view the session details.
+
+**Attendance Goal**
+- A simple progress widget that displays a configurable target such as 75%.
+- Label it as a target, not an official institutional requirement.
+- Never let this widget manipulate actual attendance records.
+
+Include useful empty states when no classes or finalized records exist.
+
+## 4.3 Weekly Timetable
+
+Build a functional timetable screen with:
+
+- Monday through Saturday.
+- Clear day selector.
+- Weekly timetable grid.
+- Class cards with start time, end time, subject, category, and optional room.
+- “Add Class” action.
+- Edit and delete actions for future timetable entries.
+- A form with field validation.
+- Subject selection or creation.
+- Theory/Practical selection.
+- Start and end time fields.
+- Optional room or class location.
+- Clear conflict warnings when two classes overlap.
+
+Allow the demo student to add, edit, and remove timetable entries.
+
+Do not silently create overlapping classes.
+
+Use IST for all timetable interpretation.
+
+A timetable entry is a recurring schedule template; a class session is a specific occurrence on a particular date. Keep these concepts separate in the data model.
+
+Editing a timetable template must not rewrite finalized historical attendance records.
+
+For future dates, session generation must use the updated timetable. For dates already generated, do not silently change finalized session times or attendance.
+
+## 4.4 Live Class Attendance
+
+Create a focused class-session page or modal.
+
+Display:
+- Subject name.
+- Theory/Practical type.
+- Scheduled date.
+- Exact start and end time.
+- Remaining time until the attendance window closes.
+- Personal attendance status.
+- Optional live photo action.
+- Attendance receipt when recorded.
+
+Primary action:
+**“Mark Present.”**
+
+The action must be available only during the exact scheduled interval.
+
+Do not introduce a separate grace period or additional marking window.
+
+If the class is scheduled for 10:00 AM to 11:00 AM IST, a mark can be accepted from the start instant up to, but not including, 11:00 AM. At or after the end instant, reject the mark.
+
+Use backend/server time for authoritative validation. Never trust the browser clock for attendance eligibility.
+
+The frontend countdown is informational. The backend must independently validate every attendance submission.
+
+After successful submission:
+- Show a clear confirmation.
+- Display the recorded server receipt time in IST.
+- Change the class state to Present.
+- Prevent duplicate marks.
+- Keep the record associated with the correct student and class session.
+
+If no valid Present mark was recorded by the class end, finalize the personal record as Absent.
+
+If a valid Present mark was received before the deadline, the finalizer must preserve it.
+
+Once finalized, the student must not be able to edit the personal status.
+
+## 4.5 Optional Live Photo Evidence
+
+Provide an optional “Capture Live Photo” feature during the Present-marking flow.
+
+For the demo implementation:
+- Use the browser's live camera API where supported.
+- Request permission only after the student explicitly selects the camera action.
+- Show a camera preview.
+- Allow capture and preview.
+- Allow retaking or discarding the image before submitting attendance.
+- Associate the captured image with the exact demo student and class session.
+- Keep the feature optional.
+- If camera access fails or is denied, attendance marking must still work.
+
+Do not provide an ordinary gallery/file-upload picker in the MVP.
+
+If a captured photo needs to be represented in the demo, use a clearly temporary in-memory evidence mechanism. Do not claim that the image is privately or permanently stored after the server restarts.
+
+Future Firebase Storage integration will handle persistent private photo storage.
+
+Show a privacy note explaining that photos are optional, should avoid capturing other students or sensitive information, and are supporting context rather than proof of physical presence.
+
+Store separate fields for:
+- Server receipt timestamp.
+- Client-reported capture timestamp, if available.
+- Evidence reference.
+
+Never treat client capture time as independently verified.
+
+## 4.6 Attendance History
+
+Create a full attendance-history screen.
+
+Include:
+- Chronological list or table of class sessions.
+- Date.
+- Subject.
+- Scheduled start and end times.
+- Personal attendance status.
+- ERP status if recorded.
+- Finalization status.
+- Optional evidence indicator.
+
+Filters:
+- Subject.
+- Date range.
+- Theory/Practical.
+- Personal status.
+- ERP comparison status.
+
+Use readable labels:
+- Upcoming.
+- Present.
+- Automatically marked Absent.
+- Cancelled.
+- Finalized.
+- ERP Not Entered.
+- Potential Discrepancy.
+
+Do not represent a cancelled class as an absence.
+
+Do not show unfinalized future sessions as Absent.
+
+Make each session row open a details screen or modal.
+
+## 4.7 Subject-Wise Attendance
+
+Create a subject overview with one card or row per subject.
+
+Display:
+- Subject name.
+- Subject icon.
+- Theory/Practical category.
+- Present count.
+- Absent count.
+- Total eligible finalized sessions.
+- Personal attendance percentage.
+- Optional target progress.
+
+Allow the student to open subject-specific attendance history.
+
+Calculate percentages from aggregate counts. Do not calculate overall attendance by averaging subject percentages.
+
+When no eligible sessions exist, display “N/A” instead of dividing by zero.
+
+## 4.8 ERP Comparison
+
+Build a dedicated comparison page between:
+
+**My AttendWise Record** and **College ERP Record**.
+
+The ERP input must have exactly two selectable options:
+- Present.
+- Absent.
+
+Do not add “Pending,” “Not checked,” or “Not reflected” as selectable ERP options.
+
+If the student has not entered an ERP status, the stored value must remain null/unrecorded. The interface may display “ERP Not Entered” as an informational state, but it must not become a third option in the ERP input.
+
+Comparison rules:
+- Personal Present + ERP Present = Match.
+- Personal Absent + ERP Absent = Match.
+- Personal Present + ERP Absent = Potential Discrepancy.
+- Personal Absent + ERP Present = Potential Discrepancy.
+- ERP status null = ERP Not Entered; no comparison conclusion.
+
+Use green for matches and amber for potential discrepancies.
+
+Use neutral wording. Never label the ERP record “wrong,” “fraudulent,” or “incorrect” based solely on the comparison.
+
+The student must manually record what they see in their college ERP. Do not implement scraping, browser automation, or direct college ERP integration.
+
+Once a class session is finalized, its ERP value must also become immutable in the current MVP. Do not provide an editing or appeal workflow after finalization.
+
+## 4.9 Attendance Details
+
+For a selected session, display:
+- Subject and category.
+- Scheduled date.
+- Scheduled start and end times.
+- Personal status.
+- Server receipt time.
+- Finalization time.
+- ERP status if recorded.
+- Optional evidence thumbnail or indicator.
+- Event history.
+
+Visually separate the scheduled interval from the actual server receipt timestamp.
+
+Show a notice that finalized records cannot be edited.
+
+Use an event timeline for events such as:
+- Class session created.
+- Present mark received.
+- Session finalized.
+- ERP status recorded.
+
+Do not claim that the event history is absolutely tamper-proof.
+
+## 4.10 Profile and Settings
+
+Include:
+- Demo student profile.
+- Account context.
+- Timezone display: “India Standard Time (IST).”
+- Timetable shortcut.
+- Privacy information.
+- Optional evidence guidance.
+- Attendance target preference.
+- Sign out / Exit Demo.
+
+Avoid settings that are not implemented.
+
+---
+
+# PART 5 — CORE ATTENDANCE BUSINESS RULES
+
+These rules are mandatory and must be implemented in the backend service layer, not just in frontend components.
+
+## 5.1 Personal attendance status
+
+Use an explicit status model for a class session, for example:
+
+- scheduled / upcoming.
+- present.
+- absent.
+- cancelled.
+
+Keep finalization metadata separate from the attendance status when useful.
+
+A session must have a stable unique session ID.
+
+The student's personal attendance and ERP status are separate fields with separate validation rules.
+
+## 5.2 Exact attendance window
+
+Attendance may be marked Present only when:
+
+`scheduledStart <= serverNow < scheduledEnd`
+
+The time must be obtained from the backend's trusted clock.
+
+Reject requests outside this interval, including requests made exactly at the end boundary.
+
+The frontend must not be trusted to provide the authoritative current time.
+
+## 5.3 Automatic finalization
+
+Implement a backend finalization service that identifies eligible sessions whose scheduled end time has passed.
+
+For each session:
+- If cancelled, preserve the cancelled state and exclude it from calculations.
+- If already finalized, do nothing.
+- If a valid Present mark exists, preserve Present and finalize the session.
+- Otherwise, set the personal status to Absent and finalize it.
+
+Finalization must be idempotent: running it repeatedly must not change already finalized records.
+
+Use a lightweight recurring background task while the server is running for demo purposes. Also implement server-time checks so late requests are rejected even if the background task has not run.
+
+Do not claim guaranteed background execution after the server stops. Explain this limitation in the project documentation.
+
+## 5.4 Immutability
+
+After finalization:
+- The student cannot change the personal status.
+- The student cannot change the ERP status.
+- The session's finalized attendance data cannot be overwritten by ordinary API requests.
+- Attempts to edit finalized records must return a clear validation error.
+- Frontend buttons must reflect the locked state, but backend enforcement is mandatory.
+
+The finalizer must never overwrite a valid Present mark received before the deadline.
+
+Do not build a correction or appeal workflow in this MVP.
+
+## 5.5 Class cancellation
+
+Cancelled sessions must:
+- Remain identifiable as Cancelled.
+- Not count as Present.
+- Not count as Absent.
+- Be excluded from both attendance denominators.
+- Not be finalized as ordinary absence.
+
+## 5.6 Timezone
+
+Use the IANA timezone `Asia/Kolkata` for all student-facing dates and schedule interpretation.
+
+Display timestamps in a consistent format, for example:
+
+`15 Oct 2026, 10:42 AM IST`
+
+Store timestamp instants in a consistent format and convert to IST for display.
+
+Avoid ambiguous date parsing and browser-local timezone dependence.
+
+Ensure weekly recurrence and class-date generation follow the IST calendar.
+
+---
+
+# PART 6 — ATTENDANCE CALCULATIONS
+
+Implement these calculations in reusable backend functions and expose the results through API responses.
+
+## 6.1 Personal attendance
+
+For all eligible finalized sessions:
+
+Personal Attendance Percentage = Personal Present Sessions / Total Eligible Finalized Sessions × 100.
+
+Present sessions count in the numerator and denominator.
+
+Absent sessions count only in the denominator.
+
+Cancelled, future, and unfinalized sessions are excluded.
+
+## 6.2 ERP attendance
+
+ERP Attendance Percentage = ERP Present Sessions / Sessions with ERP status Present or Absent × 100.
+
+Sessions whose ERP status is null must not count in the ERP denominator.
+
+Show the number of sessions for which ERP status has not been entered.
+
+## 6.3 Theory and Practical
+
+Calculate Theory Attendance and Practical Attendance separately using the same personal attendance formula and the corresponding subject/session categories.
+
+## 6.4 Overall attendance
+
+Calculate overall attendance from aggregate eligible session counts, not by averaging subject percentages or averaging theory and practical percentages.
+
+If the denominator is zero, return a null percentage and display “N/A” or “No finalized classes yet.”
+
+Use consistent rounding, preferably one decimal place in detailed views and whole numbers in compact summary cards.
+
+Keep counts and percentages internally consistent.
+
+---
+
+# PART 7 — BACKEND AND API ARCHITECTURE
+
+Create a clear layered architecture:
+
+1. API routes.
+2. Request validation.
+3. Business services.
+4. Repository interfaces.
+5. In-memory demo repository.
+6. Shared types and domain rules.
+
+Avoid putting all business logic inside Express route handlers.
+
+Suggested organization:
+
+- `client/src/app`
+- `client/src/components`
+- `client/src/features/dashboard`
+- `client/src/features/timetable`
+- `client/src/features/attendance`
+- `client/src/features/erp-comparison`
+- `client/src/features/subjects`
+- `client/src/features/settings`
+- `client/src/services`
+- `client/src/types`
+- `server/src/routes`
+- `server/src/services`
+- `server/src/repositories`
+- `server/src/domain`
+- `server/src/validation`
+- `server/src/jobs`
+- `shared`
+
+Adjust the structure to match the actual project setup, but preserve clear separation of concerns.
+
+## 7.1 API endpoints
+
+Implement a coherent REST API, including equivalents of the following:
+
+**Demo context**
+- `POST /api/demo/session`
+- `DELETE /api/demo/session`
+- `GET /api/demo/profile`
+
+**Dashboard**
+- `GET /api/dashboard/summary`
+- `GET /api/dashboard/today`
+
+**Subjects**
+- `GET /api/subjects`
+- `POST /api/subjects`
+- `PATCH /api/subjects/:subjectId`
+- `DELETE /api/subjects/:subjectId`
+
+**Timetable**
+- `GET /api/timetable`
+- `POST /api/timetable`
+- `PATCH /api/timetable/:entryId`
+- `DELETE /api/timetable/:entryId`
+
+**Sessions**
+- `GET /api/sessions`
+- `GET /api/sessions/:sessionId`
+- `POST /api/sessions/:sessionId/mark-present`
+- `POST /api/sessions/:sessionId/erp-status`
+- `POST /api/sessions/:sessionId/cancel`
+- `GET /api/sessions/:sessionId/events`
+
+**History and statistics**
+- `GET /api/attendance/history`
+- `GET /api/attendance/subjects`
+- `GET /api/attendance/summary`
+- `GET /api/attendance/comparison`
+
+These are proposed API shapes. Refine them where appropriate, but avoid duplicate endpoints that perform the same operation.
+
+Use proper HTTP methods, status codes, validation, and structured error responses.
+
+Examples:
+- `400` for invalid input.
+- `404` for unknown resources.
+- `409` for invalid state transitions or attempts to edit finalized records.
+- `422` when a validly structured request violates a business rule.
+- Appropriate server error responses for unexpected failures.
+
+Do not return successful responses when an operation has been rejected.
+
+## 7.2 Demo student isolation
+
+Use a fixed demo student identity for the initial single-user demo.
+
+Keep `studentId` explicit in domain models and repository interfaces so future multi-user Firebase integration is straightforward.
+
+Never trust a client-supplied student ID as authorization in a future authenticated implementation. The Firebase version must derive identity from a verified authentication context and enforce ownership server-side.
+
+The current demo mode is not suitable for sensitive production data.
+
+## 7.3 Repository interface
+
+Implement repository contracts for:
+- Student/profile data.
+- Subjects.
+- Timetable entries.
+- Class sessions.
+- Attendance events.
+- Evidence references.
+
+Provide in-memory implementations for the current demo.
+
+Keep domain services independent of the concrete storage mechanism.
+
+Do not make React components call the repository directly. The browser should communicate with the backend API.
+
+---
+
+# PART 8 — DOMAIN DATA MODELS
+
+Use strongly typed models and validate important invariants.
+
+## Student profile
+- `id`
+- `displayName`
+- `email` (demo-only sample)
+- `timezone`
+- `attendanceTarget`
+- `createdAt`
+
+## Subject
+- `id`
+- `studentId`
+- `name`
+- `category`: Theory or Practical
+- `iconKey`
+- `createdAt`
+- `updatedAt`
+
+## Timetable entry
+- `id`
+- `studentId`
+- `subjectId`
+- `dayOfWeek`
+- `startTime`
+- `endTime`
+- `category`
+- `room` (optional)
+- `active`
+- `createdAt`
+- `updatedAt`
+
+Represent recurring timetable times in a format that can be interpreted in `Asia/Kolkata`.
+
+## Class session
+- `id`
+- `studentId`
+- `subjectId`
+- `timetableEntryId` (optional)
+- `scheduledDate`
+- `scheduledStartAt`
+- `scheduledEndAt`
+- `personalStatus`
+- `erpStatus`: Present, Absent, or null
+- `cancelledAt` (optional)
+- `finalizedAt` (optional)
+- `createdAt`
+- `updatedAt`
+
+## Attendance event
+- `id`
+- `studentId`
+- `sessionId`
+- `eventType`
+- `serverTimestamp`
+- `metadata` with limited non-sensitive contextual information
+
+## Evidence reference
+- `id`
+- `studentId`
+- `sessionId`
+- `storageKey` or temporary demo reference
+- `serverReceivedAt`
+- `clientCapturedAt` (optional)
+- `createdAt`
+
+Do not persist raw camera images in event logs.
+
+Ensure each session is uniquely identified and tied to the correct student and subject.
+
+Prevent duplicate sessions for the same timetable occurrence.
+
+Use consistent ID generation and predictable validation.
+
+---
+
+# PART 9 — DEMO DATA
+
+Seed a realistic semester-style dataset.
+
+Create sample subjects such as:
+- Mathematics — Theory.
+- Data Structures — Theory.
+- Data Structures Lab — Practical.
+- Database Management Systems — Theory.
+- Artificial Intelligence Lab — Practical.
+
+Provide a Monday-to-Saturday timetable with reasonable class times.
+
+Seed historical sessions with:
+- Present records.
+- Automatically finalized Absent records.
+- Some cancelled classes.
+- A mixture of matching and differing ERP records.
+- Some ERP records that have not been entered.
+- A few upcoming sessions.
+
+Use sample data that demonstrates all major states.
+
+Do not make every attendance percentage equal to 75%. Generate counts and calculate the resulting percentages correctly.
+
+Do not create impossible records such as an ERP value of Pending, an absent record for a cancelled class, or a finalized record that can still be edited.
+
+Include empty states that can be tested by removing or clearing demo data.
+
+Make it easy for the developer to reset the demo dataset.
+
+---
+
+# PART 10 — FRONTEND ENGINEERING
+
+Use reusable React components, for example:
+
+- `AppShell`
+- `Sidebar`
+- `TopHeader`
+- `MobileNavigation`
+- `StatCard`
+- `AttendanceProgress`
+- `SubjectCard`
+- `ClassSessionCard`
+- `StatusBadge`
+- `TimetableGrid`
+- `AttendanceHistoryTable`
+- `ERPComparisonRow`
+- `SessionDetailsPanel`
+- `EmptyState`
+- `LoadingState`
+- `ErrorState`
+- `ConfirmDialog`
+- `ToastNotification`
+
+Use typed API response models.
+
+Implement:
+- Loading indicators.
+- Empty states.
+- Error messages.
+- Form validation.
+- Confirmation for destructive actions.
+- Success feedback.
+- Responsive navigation.
+- Accessible keyboard interactions.
+- Clear focus indicators.
+- Readable status badges.
+- Consistent date and time formatting.
+
+Every visible interactive control must perform its stated action.
+
+Do not leave dead buttons, fake filters, decorative controls that appear functional, or links leading nowhere.
+
+Use sensible component boundaries without creating a component for every trivial element.
+
+---
+
+# PART 11 — SECURITY AND RELIABILITY
+
+Even though this is a demo, use sound engineering practices.
+
+- Validate all API input on the server.
+- Do not trust client-supplied timestamps.
+- Do not trust client-supplied attendance percentages.
+- Enforce attendance eligibility in backend services.
+- Enforce finalized-record immutability in backend services.
+- Prevent duplicate Present submissions.
+- Keep photo access private in the future storage design.
+- Do not expose privileged credentials.
+- Do not log passwords or raw camera images.
+- Use safe error responses without exposing stack traces to the UI.
+- Avoid insecure dynamic HTML rendering.
+- Handle camera permission denial gracefully.
+- Handle invalid session IDs and unknown subjects.
+- Handle overlapping timetable entries.
+- Prevent cancelled sessions from entering attendance calculations.
+
+The demo does not need production authentication or durable persistence. Clearly document these limitations.
+
+For future Firebase integration, plan for Firestore Security Rules, verified user identity, ownership checks, private Storage Rules, server-side timestamp validation, and atomic or transactional updates where necessary.
+
+Do not imply that a single-process in-memory repository provides production-grade multi-instance consistency.
+
+---
+
+# PART 12 — TESTING AND ACCEPTANCE CRITERIA
+
+Implement automated tests for the core business logic and important API behaviors.
+
+At minimum, test the following:
+
+1. Present marking is accepted during the valid class interval.
+2. Present marking is rejected before the scheduled start.
+3. Present marking is rejected exactly at the scheduled end.
+4. Present marking is rejected after the scheduled end.
+5. A valid Present record is preserved by automatic finalization.
+6. A session with no valid Present record becomes Absent at finalization.
+7. Repeated finalization does not modify a finalized record.
+8. Finalized personal attendance cannot be edited.
+9. Finalized ERP status cannot be edited.
+10. Cancelled sessions do not count in either attendance denominator.
+11. Null ERP statuses are excluded from the ERP denominator.
+12. Present/Present and Absent/Absent compare as Match.
+13. Differing personal and ERP statuses compare as Potential Discrepancy.
+14. Overall attendance is calculated from aggregate counts.
+15. Zero denominators return N/A rather than a division error.
+16. All displayed dates and times use IST.
+17. Camera denial does not prevent attendance marking.
+18. Invalid timetable intervals are rejected.
+19. Overlapping timetable entries are handled clearly.
+20. The frontend updates from actual API responses.
+
+Use an injectable clock or a controllable time provider in unit tests so attendance boundaries can be tested deterministically without waiting for real class times.
+
+Run the application and resolve compile errors, runtime errors, broken routes, and failing tests.
+
+---
+
+# PART 13 — DOCUMENTATION AND FUTURE MIGRATION
+
+Create a clear README containing:
+
+- Application overview.
+- Technology stack.
+- How to run the app in Replit.
+- Project directory structure.
+- API endpoint summary.
+- Demo mode explanation.
+- In-memory data limitations.
+- Attendance rules and formulas.
+- IST handling.
+- Test instructions.
+- Known limitations.
+- Future Firebase migration plan.
+
+Create a short architecture document describing how to replace:
+- Demo student context with Firebase Authentication.
+- In-memory repositories with Cloud Firestore repositories.
+- Temporary evidence references with Firebase Storage.
+- Demo session identity with authenticated user identity.
+- In-process finalization scheduling with a reliable scheduled backend process.
+
+Keep domain models and API contracts as stable as reasonably possible so the Firebase migration does not require a complete frontend rewrite.
+
+---
+
+# PART 14 — EXECUTION ORDER
+
+Build the application in this order:
+
+1. Inspect the Replit project and establish the React/TypeScript frontend and Express/TypeScript backend.
+2. Define shared types, domain models, validation, repository interfaces, and business rules.
+3. Implement the in-memory demo repository and seed data.
+4. Implement API routes and backend services.
+5. Implement the application shell, sidebar, header, design tokens, and reusable components.
+6. Implement dashboard and timetable screens.
+7. Implement class-session attendance and automatic finalization.
+8. Implement history, subject analytics, ERP comparison, and session details.
+9. Implement profile/settings and responsive mobile layouts.
+10. Add tests and README documentation.
+11. Run the application, inspect every screen, test the primary workflows, and fix errors.
+
+Do not stop after generating the first dashboard. Complete the core navigation and functional MVP.
+
+If the task is too large for a single uninterrupted implementation, work in coherent stages while preserving the architecture and keeping the application runnable after each stage.
+
+# FINAL EXPECTATION
+
+Deliver a working AttendWise full-stack demo with a polished, student-friendly interface closely inspired by the supplied UI reference, a functional backend, meaningful seeded data, correct attendance rules, consistent IST handling, clear API contracts, and a clean storage abstraction ready for future Firebase integration.
+
+Prioritize correctness of attendance logic and data consistency over decorative effects. The finished app should feel like one cohesive product rather than disconnected sample pages.
+
+Do not integrate a database, Supabase, PostgreSQL, Firebase, or real authentication in this first phase.

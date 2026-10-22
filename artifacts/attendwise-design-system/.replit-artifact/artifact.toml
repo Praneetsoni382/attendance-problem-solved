@@ -1,0 +1,19 @@
+kind = "design-system"
+previewPath = "/attendwise-design-system/"
+title = "AttendWise Design System"
+description = "A reusable visual system for AttendWise, a student attendance companion that helps college students understand and manage their personal class records."
+version = "1.0.0"
+id = "artifacts/attendwise-design-system"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/attendwise-design-system/" ]
+localPort = 18228
+
+[services.development]
+run = "pnpm --filter @workspace/attendwise-design-system run dev"
+
+[services.env]
+PORT = "18228"
+BASE_PATH = "/attendwise-design-system/"
