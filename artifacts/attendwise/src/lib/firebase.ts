@@ -27,6 +27,7 @@ import {
   writeBatch,
   query,
   where,
+  limit,
   onSnapshot,
   serverTimestamp,
   getDocFromServer,
@@ -73,6 +74,7 @@ export const db = initializeFirestore(
   firebaseConfig.firestoreDatabaseId
 );
 export const storage = getStorage(app, firebaseConfig.storageBucket);
+export { ref, uploadString, getDownloadURL };
 export const googleProvider = new GoogleAuthProvider();
 
 export enum OperationType {
@@ -525,80 +527,81 @@ export async function ensurePythonTrainingLoaded(uid: string): Promise<{
   }
 }
 
-// Load authentic SISTec timetable and subjects if not yet seeded for this user
+// Load authentic SISTec timetable, subjects, and all sessions directly into Cloud Firestore if not yet seeded
 export async function ensureSistecTimetableLoaded(uid: string): Promise<void> {
   if (!auth.currentUser || auth.currentUser.uid !== uid) {
     return;
   }
-  const subjectsRef = collection(db, "users", uid, "subjects");
   try {
-    const snap = await getDocs(subjectsRef);
-    if (!snap.empty) {
-      // Already initialized: ensure P4 timings, weekly sessions, and Python training are synced
-      await syncTimetableSlotTimings(uid);
-      await generateWeeklySessions(uid);
-      await ensurePythonTrainingLoaded(uid);
+    const sessionsRef = collection(db, "users", uid, "classSessions");
+    const sessionCheck = await getDocs(query(sessionsRef, limit(1)));
+    if (!sessionCheck.empty) {
+      // Sessions are already seeded in Cloud Firestore: avoid redundant reads
       return;
     }
 
-    const batch = writeBatch(db);
-    const subjectMap = new Map<string, SistecSubjectSeed>();
+    const subjectsRef = collection(db, "users", uid, "subjects");
+    const subSnap = await getDocs(query(subjectsRef, limit(1)));
+    if (subSnap.empty) {
+      const batch = writeBatch(db);
+      const subjectMap = new Map<string, SistecSubjectSeed>();
 
-    // 1. Batch create all 12 SISTec Subjects
-    for (const sub of SISTEC_SUBJECTS) {
-      subjectMap.set(sub.id, sub);
-      const subDocRef = doc(db, "users", uid, "subjects", sub.id);
-      batch.set(subDocRef, {
-        id: sub.id,
-        studentId: uid,
-        code: sub.code,
-        name: sub.name,
-        category: sub.category,
-        teacherName: null,
-        iconKey: sub.iconKey,
-        reviewNeeded: sub.reviewNeeded ?? false,
-        notes: sub.notes ?? null,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      });
+      // 1. Batch create all 12 SISTec Subjects
+      for (const sub of SISTEC_SUBJECTS) {
+        subjectMap.set(sub.id, sub);
+        const subDocRef = doc(db, "users", uid, "subjects", sub.id);
+        batch.set(subDocRef, {
+          id: sub.id,
+          studentId: uid,
+          code: sub.code,
+          name: sub.name,
+          category: sub.category,
+          teacherName: null,
+          iconKey: sub.iconKey,
+          reviewNeeded: sub.reviewNeeded ?? false,
+          notes: sub.notes ?? null,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        });
+      }
+
+      // 2. Batch create all 36 SISTec Timetable entries
+      let entryIndex = 1;
+      for (const slotSeed of SISTEC_TIMETABLE_SLOTS) {
+        const sub = subjectMap.get(slotSeed.subjectId);
+        const entryId = `entry-${slotSeed.dayOfWeek}-${slotSeed.slot}-${entryIndex++}`;
+        const entryDocRef = doc(db, "users", uid, "timetableEntries", entryId);
+        batch.set(entryDocRef, {
+          id: entryId,
+          studentId: uid,
+          subjectId: slotSeed.subjectId,
+          subjectName: sub?.name ?? "Subject",
+          subjectCode: sub?.code ?? "CODE",
+          slot: slotSeed.slot,
+          dayOfWeek: slotSeed.dayOfWeek,
+          startTime: slotSeed.startTime,
+          endTime: slotSeed.endTime,
+          category: slotSeed.category,
+          room: slotSeed.room ?? (slotSeed.category === "Practical" ? "Lab" : "Classroom"),
+          teacherName: null,
+          active: true,
+          sourceId: "sistec-timetable-2026",
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        });
+      }
+
+      await batch.commit();
     }
 
-    // 2. Batch create all 36 SISTec Timetable entries
-    let entryIndex = 1;
-    for (const slotSeed of SISTEC_TIMETABLE_SLOTS) {
-      const sub = subjectMap.get(slotSeed.subjectId);
-      const entryId = `entry-${slotSeed.dayOfWeek}-${slotSeed.slot}-${entryIndex++}`;
-      const entryDocRef = doc(db, "users", uid, "timetableEntries", entryId);
-      batch.set(entryDocRef, {
-        id: entryId,
-        studentId: uid,
-        subjectId: slotSeed.subjectId,
-        subjectName: sub?.name ?? "Subject",
-        subjectCode: sub?.code ?? "CODE",
-        slot: slotSeed.slot,
-        dayOfWeek: slotSeed.dayOfWeek,
-        startTime: slotSeed.startTime,
-        endTime: slotSeed.endTime,
-        category: slotSeed.category,
-        room: slotSeed.room ?? (slotSeed.category === "Practical" ? "Lab" : "Classroom"),
-        teacherName: null,
-        active: true,
-        sourceId: "sistec-timetable-2026",
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      });
-    }
-
-    await batch.commit();
-
-    // 3. Generate initial upcoming class sessions for today and the rest of current week
+    // 3. Directly seed all teaching day class sessions in Cloud Firestore
     await generateWeeklySessions(uid);
 
-    // 4. Ensure historical Python Training (66 sessions) is seeded
+    // 4. Directly seed all historical Python Training (66 sessions) in Cloud Firestore
     await ensurePythonTrainingLoaded(uid);
   } catch (err) {
     if (auth.currentUser && auth.currentUser.uid === uid) {
-      handleFirestoreError(err, OperationType.WRITE, `users/${uid}/subjects`);
+      handleFirestoreError(err, OperationType.WRITE, `users/${uid}/classSessions`);
     } else {
       console.warn("Firestore timetable sync skipped (unauthenticated):", err);
     }
@@ -932,8 +935,12 @@ export async function markSessionPresent(
   uid: string,
   sessionId: string,
   evidenceDataUrl?: string,
-  note?: string
+  note?: string,
+  clientCapturedAt?: string
 ): Promise<{ success: boolean; message: string }> {
+  const receiptAt = new Date().toISOString();
+  const captureTimestamp = clientCapturedAt || receiptAt;
+
   // 1. Upload photo evidence to Firebase Storage if provided (pre-transaction to keep transaction atomic & fast)
   let storageDownloadUrl: string | null = null;
   let storagePath: string | null = null;
@@ -941,7 +948,14 @@ export async function markSessionPresent(
     try {
       storagePath = `users/${uid}/attendance/${sessionId}/${Date.now()}.jpg`;
       const storageRef = ref(storage, storagePath);
-      await uploadString(storageRef, evidenceDataUrl, "data_url");
+      await uploadString(storageRef, evidenceDataUrl, "data_url", {
+        contentType: "image/jpeg",
+        customMetadata: {
+          sessionId,
+          studentId: uid,
+          clientCapturedAt: captureTimestamp,
+        },
+      });
       storageDownloadUrl = await getDownloadURL(storageRef);
     } catch (storageErr) {
       console.warn("Storage upload notice (falling back to inline dataUrl persistence):", storageErr);
@@ -1010,7 +1024,6 @@ export async function markSessionPresent(
       }
     }
 
-    const receiptAt = new Date().toISOString();
     const cleanNote = note?.trim() || session.note || null;
     const finalPhotoUrl = storageDownloadUrl || evidenceDataUrl || session.photoDataUrl || null;
     const finalStoragePath = storagePath || session.evidenceStoragePath || null;
@@ -1023,7 +1036,7 @@ export async function markSessionPresent(
       finalized: true,
       finalizedAt: receiptAt,
       serverReceiptAt: receiptAt,
-      clientCaptureAt: receiptAt,
+      clientCaptureAt: captureTimestamp,
       evidenceAvailable: hasPhoto,
       photoDataUrl: finalPhotoUrl,
       evidenceStoragePath: finalStoragePath,
@@ -1045,7 +1058,7 @@ export async function markSessionPresent(
     });
 
     // Also persist metadata document for storage continuity
-    if (evidenceDataUrl || finalPhotoUrl) {
+    if (evidenceDataUrl || finalPhotoUrl || finalStoragePath) {
       const metaRef = doc(db, "users", uid, "evidenceMetadata", `meta-${sessionId}`);
       transaction.set(metaRef, {
         id: `meta-${sessionId}`,
@@ -1053,13 +1066,43 @@ export async function markSessionPresent(
         dataUrl: evidenceDataUrl || null,
         storageUrl: storageDownloadUrl || null,
         storagePath: finalStoragePath,
-        clientCapturedAt: receiptAt,
+        clientCapturedAt: captureTimestamp,
         uploadedAt: receiptAt,
       });
     }
 
     return { success: true, message: "Attendance recorded as Present (Verified & Uneditable)." };
   });
+}
+
+// Resolve evidence download URL durably from session fields, Storage reference, or evidenceMetadata fallback
+export async function resolveSessionEvidenceUrl(
+  uid: string,
+  session: ClassSessionItem
+): Promise<string | null> {
+  if (session.photoDataUrl && (session.photoDataUrl.startsWith("http") || session.photoDataUrl.startsWith("data:"))) {
+    return session.photoDataUrl;
+  }
+  if (session.evidenceStoragePath) {
+    try {
+      const storageRef = ref(storage, session.evidenceStoragePath);
+      const url = await getDownloadURL(storageRef);
+      return url;
+    } catch (e) {
+      console.warn("Storage getDownloadURL notice:", e);
+    }
+  }
+  try {
+    const metaSnap = await getDoc(doc(db, "users", uid, "evidenceMetadata", `meta-${session.id}`));
+    if (metaSnap.exists()) {
+      const data = metaSnap.data();
+      if (data?.storageUrl) return data.storageUrl;
+      if (data?.dataUrl) return data.dataUrl;
+    }
+  } catch (e) {
+    console.warn("Could not load evidence metadata fallback:", e);
+  }
+  return null;
 }
 
 // Mark Absent manually on the attendance card (finalized and uneditable)

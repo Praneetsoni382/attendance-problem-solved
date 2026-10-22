@@ -75,12 +75,16 @@ import {
   TIMEZONE,
   handleFirestoreError,
   OperationType,
+  storage,
+  resolveSessionEvidenceUrl,
   type StudentProfile,
   type SubjectItem,
   type TimetableItem,
   type ClassSessionItem,
   type AttendanceEventItem,
 } from "./lib/firebase";
+import { dataManager } from "./lib/data-manager";
+import { setCachedStore } from "./lib/idb-cache";
 import { computeFullAnalytics } from "./lib/analytics-calculator";
 import { useCamera } from "./hooks/useCamera";
 import {
@@ -908,6 +912,228 @@ function SessionLink({ session }: { session: ClassSessionItem }) {
   );
 }
 
+// Durable evidence snapshot thumbnail with capture timestamp for attendance cards
+function EvidenceSnapshotThumbnail({
+  session,
+  onViewImage,
+}: {
+  session: ClassSessionItem;
+  onViewImage?: (url: string, captureTime?: string | null, session?: ClassSessionItem) => void;
+}) {
+  const [resolvedUrl, setResolvedUrl] = useState<string | null>(session.photoDataUrl || null);
+  const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState(false);
+
+  useEffect(() => {
+    let isMounted = true;
+    if (session.photoDataUrl && (session.photoDataUrl.startsWith("http") || session.photoDataUrl.startsWith("data:"))) {
+      setResolvedUrl(session.photoDataUrl);
+      return;
+    }
+    if ((session.evidenceStoragePath || session.evidenceAvailable) && !resolvedUrl) {
+      setLoading(true);
+      resolveSessionEvidenceUrl(session.studentId || auth.currentUser?.uid || "", session)
+        .then((url) => {
+          if (isMounted) {
+            if (url) {
+              setResolvedUrl(url);
+            } else {
+              setLoadError(true);
+            }
+            setLoading(false);
+          }
+        })
+        .catch(() => {
+          if (isMounted) {
+            setLoadError(true);
+            setLoading(false);
+          }
+        });
+    }
+    return () => {
+      isMounted = false;
+    };
+  }, [session.id, session.photoDataUrl, session.evidenceStoragePath, session.evidenceAvailable]);
+
+  const hasEvidence = Boolean(
+    session.evidenceAvailable || session.photoDataUrl || session.evidenceStoragePath || resolvedUrl
+  );
+
+  if (!hasEvidence) return null;
+
+  const captureTime = session.clientCaptureAt || session.serverReceiptAt;
+  const timeFormatted = captureTime ? `${formatTime(captureTime)}` : "Verified time";
+
+  return (
+    <div className="mt-2.5 flex items-center gap-2.5 rounded-lg border border-emerald-500/25 bg-emerald-500/10 p-2 text-xs">
+      {loading ? (
+        <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-md border border-emerald-500/30 bg-emerald-500/15">
+          <Camera className="h-4 w-4 animate-pulse text-emerald-600" />
+        </div>
+      ) : resolvedUrl && !loadError ? (
+        <img
+          src={resolvedUrl}
+          alt="Verified camera snapshot"
+          className="h-12 w-12 shrink-0 rounded-md object-cover border border-emerald-500/30 cursor-pointer hover:opacity-90 transition-opacity"
+          onClick={() => onViewImage?.(resolvedUrl, captureTime, session)}
+          onError={() => setLoadError(true)}
+          title="Click to view full photo evidence"
+        />
+      ) : (
+        <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-md border border-emerald-500/30 bg-emerald-500/15 text-emerald-700">
+          <Camera className="h-5 w-5" />
+        </div>
+      )}
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-1.5 text-[11px] font-semibold text-emerald-800 dark:text-emerald-300">
+          <Camera className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
+          <span className="truncate">Camera Snapshot Evidence</span>
+        </div>
+        <p className="text-[10px] text-muted-foreground mt-0.5 truncate">
+          Captured: <strong className="text-foreground font-medium">{timeFormatted}</strong>
+        </p>
+      </div>
+      {resolvedUrl && !loadError ? (
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="h-7 px-2 text-[10px] text-emerald-700 dark:text-emerald-300 hover:bg-emerald-500/20"
+          onClick={() => onViewImage?.(resolvedUrl, captureTime, session)}
+        >
+          View
+        </Button>
+      ) : null}
+    </div>
+  );
+}
+
+// Compact photo evidence indicator with timestamp for table/list views
+function EvidenceSnapshotRow({
+  session,
+  onViewImage,
+}: {
+  session: ClassSessionItem;
+  onViewImage?: (url: string, captureTime?: string | null, session?: ClassSessionItem) => void;
+}) {
+  const [resolvedUrl, setResolvedUrl] = useState<string | null>(session.photoDataUrl || null);
+  const [loadError, setLoadError] = useState(false);
+
+  useEffect(() => {
+    let isMounted = true;
+    if (session.photoDataUrl && (session.photoDataUrl.startsWith("http") || session.photoDataUrl.startsWith("data:"))) {
+      setResolvedUrl(session.photoDataUrl);
+      return;
+    }
+    if ((session.evidenceStoragePath || session.evidenceAvailable) && !resolvedUrl) {
+      resolveSessionEvidenceUrl(session.studentId || auth.currentUser?.uid || "", session)
+        .then((url) => {
+          if (isMounted && url) setResolvedUrl(url);
+        })
+        .catch(() => {});
+    }
+    return () => {
+      isMounted = false;
+    };
+  }, [session.id, session.photoDataUrl, session.evidenceStoragePath, session.evidenceAvailable]);
+
+  const hasEvidence = Boolean(
+    session.evidenceAvailable || session.photoDataUrl || session.evidenceStoragePath || resolvedUrl
+  );
+  if (!hasEvidence) return null;
+
+  const captureTime = session.clientCaptureAt || session.serverReceiptAt;
+
+  return (
+    <div className="flex items-center gap-2 mt-1.5 flex-wrap">
+      {resolvedUrl && !loadError ? (
+        <img
+          src={resolvedUrl}
+          alt="Evidence thumbnail"
+          className="h-8 w-8 rounded object-cover border border-emerald-500/30 cursor-pointer shrink-0 hover:opacity-90"
+          onClick={() => onViewImage?.(resolvedUrl, captureTime, session)}
+          onError={() => setLoadError(true)}
+          title="Click to view photo evidence"
+        />
+      ) : (
+        <span className="flex h-7 w-7 items-center justify-center rounded bg-emerald-500/15 text-emerald-700">
+          <Camera className="h-3.5 w-3.5" />
+        </span>
+      )}
+      <span className="text-[11px] text-emerald-800 dark:text-emerald-300 font-medium bg-emerald-50 dark:bg-emerald-950/40 px-2 py-0.5 rounded border border-emerald-200 dark:border-emerald-800 flex items-center gap-1.5">
+        <Camera className="h-3 w-3 text-emerald-600" />
+        <span>Photo Proof</span>
+        {captureTime ? (
+          <span className="text-muted-foreground font-normal">
+            · {formatTime(captureTime)}
+          </span>
+        ) : null}
+      </span>
+    </div>
+  );
+}
+
+// Full view dialog for photo evidence
+function PhotoEvidenceModal({
+  photoInfo,
+  onClose,
+}: {
+  photoInfo: { url: string; captureTime?: string | null; session?: ClassSessionItem } | null;
+  onClose: () => void;
+}) {
+  if (!photoInfo) return null;
+
+  return (
+    <Dialog open={Boolean(photoInfo)} onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="max-w-md p-0 sm:rounded-2xl overflow-hidden">
+        <DialogHeader className="p-4 bg-muted/30 border-b">
+          <DialogTitle className="text-sm font-semibold flex items-center gap-1.5">
+            <Camera className="h-4 w-4 text-emerald-600" />
+            Verified Camera Snapshot Evidence
+          </DialogTitle>
+          {photoInfo.session && (
+            <DialogDescription className="text-xs text-muted-foreground">
+              {photoInfo.session.subjectName} ({photoInfo.session.slot}) · {formatDate(photoInfo.session.scheduledDate)}
+            </DialogDescription>
+          )}
+        </DialogHeader>
+        <div className="p-4 space-y-3">
+          <img
+            src={photoInfo.url}
+            alt="Verified attendance snapshot proof"
+            className="w-full max-h-80 object-contain rounded-xl border bg-black/5"
+          />
+          <div className="rounded-lg border bg-muted/40 p-3 text-xs space-y-1">
+            <div className="flex items-center justify-between">
+              <span className="text-muted-foreground">Capture Instant:</span>
+              <span className="font-semibold text-foreground">
+                {photoInfo.captureTime ? formatDateTime(photoInfo.captureTime) : "Recorded at attendance time"}
+              </span>
+            </div>
+            {photoInfo.session?.room && (
+              <div className="flex items-center justify-between">
+                <span className="text-muted-foreground">Location:</span>
+                <span className="font-medium text-foreground">Room {photoInfo.session.room}</span>
+              </div>
+            )}
+            <div className="flex items-center justify-between">
+              <span className="text-muted-foreground">Integrity:</span>
+              <span className="text-emerald-700 dark:text-emerald-400 font-semibold flex items-center gap-1">
+                <ShieldCheck className="h-3.5 w-3.5" /> Permanent Firebase Storage
+              </span>
+            </div>
+          </div>
+        </div>
+        <DialogFooter className="p-3 border-t bg-muted/20">
+          <Button variant="outline" size="sm" onClick={onClose} className="text-xs">
+            Close
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 // Interactive Attendance Card Dialog matching "Live Class Attendance" & "Attendance Details" mockup
 function AttendanceCardDialog({
   open,
@@ -926,7 +1152,7 @@ function AttendanceCardDialog({
   sessions?: ClassSessionItem[];
   user: { uid: string; email?: string | null; displayName?: string | null };
   onRecordErp?: (sessionId: string, status: "Present" | "Absent") => Promise<void>;
-  onMarkPresent?: (sessionId: string, photoUrl?: string, note?: string) => Promise<void>;
+  onMarkPresent?: (sessionId: string, photoUrl?: string, note?: string, capturedAt?: string) => Promise<void>;
   onMarkAbsent?: (sessionId: string, note?: string) => Promise<void>;
   onFreezeClass?: (sessionId: string) => Promise<void>;
 }) {
@@ -944,6 +1170,7 @@ function AttendanceCardDialog({
   const [evidencePhotoUrl, setEvidencePhotoUrl] = useState<string | null>(null);
   const [confirmFreeze, setConfirmFreeze] = useState(false);
   const [capturedPhotoUrl, setCapturedPhotoUrl] = useState<string | null>(null);
+  const [capturedPhotoAt, setCapturedPhotoAt] = useState<string | null>(null);
   
   const { 
     videoRef, 
@@ -964,12 +1191,19 @@ function AttendanceCardDialog({
       setEvidencePhotoUrl(session.photoDataUrl);
       return;
     }
-    if (!session.evidenceAvailable || !user || !auth.currentUser) {
+    if (!session.evidenceAvailable && !session.evidenceStoragePath) {
       setEvidencePhotoUrl(null);
       return;
     }
+    if (!user || !auth.currentUser) return;
+
     const fetchEvidence = async () => {
       try {
+        const resolved = await resolveSessionEvidenceUrl(user.uid, session);
+        if (resolved) {
+          setEvidencePhotoUrl(resolved);
+          return;
+        }
         const metaSnap = await getDoc(doc(db, "users", user.uid, "evidenceMetadata", `meta-${session.id}`));
         if (metaSnap.exists()) {
           const data = metaSnap.data();
@@ -982,7 +1216,7 @@ function AttendanceCardDialog({
       }
     };
     fetchEvidence();
-  }, [open, session?.id, session?.photoDataUrl, session?.evidenceAvailable, user?.uid]);
+  }, [open, session?.id, session?.photoDataUrl, session?.evidenceAvailable, session?.evidenceStoragePath, user?.uid]);
 
   const snapPhoto = () => {
     if (!videoRef.current) return;
@@ -993,7 +1227,9 @@ function AttendanceCardDialog({
     if (ctx) {
       ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
       const dataUrl = canvas.toDataURL("image/jpeg", 0.6);
+      const captureInstant = new Date().toISOString();
       setCapturedPhotoUrl(dataUrl);
+      setCapturedPhotoAt(captureInstant);
     }
     stopCamera();
   };
@@ -1052,6 +1288,7 @@ function AttendanceCardDialog({
       setNotice(null);
       setError(null);
       setCapturedPhotoUrl(null);
+      setCapturedPhotoAt(null);
     }
   }, [open, stopCamera]);
 
@@ -1117,9 +1354,9 @@ function AttendanceCardDialog({
       // 1. Mark AttendWise Present (only allowed if not already present)
       if (stagedPersonalStatus === "present" && session.personalStatus !== "present") {
         if (onMarkPresent) {
-          await onMarkPresent(session.id, capturedPhotoUrl || undefined, finalNote);
+          await onMarkPresent(session.id, capturedPhotoUrl || undefined, finalNote, capturedPhotoAt || undefined);
         } else {
-          await markSessionPresent(user.uid, session.id, capturedPhotoUrl || undefined, finalNote);
+          await markSessionPresent(user.uid, session.id, capturedPhotoUrl || undefined, finalNote, capturedPhotoAt || undefined);
         }
         personalAttendanceHandled = true;
       } else if (stagedPersonalStatus === "absent" && session.personalStatus !== "absent") {
@@ -1316,11 +1553,18 @@ function AttendanceCardDialog({
                   Server IST Receipt: <strong>{session.serverReceiptAt ? `${formatClock(session.serverReceiptAt)} IST` : "Recorded"}</strong>
                   {session.scheduledDate ? ` · Date: ${formatDate(session.scheduledDate)}` : ""}
                 </p>
-                {(session.photoDataUrl || evidencePhotoUrl) ? (
-                  <div className="space-y-1 pt-1">
-                    <span className="text-[11px] font-medium text-emerald-800 dark:text-emerald-200 block">
-                      Live Captured Proof Photo:
-                    </span>
+                {(session.photoDataUrl || evidencePhotoUrl || session.evidenceAvailable) ? (
+                  <div className="space-y-1.5 pt-1">
+                    <div className="flex items-center justify-between text-[11px] font-medium text-emerald-800 dark:text-emerald-200">
+                      <span className="flex items-center gap-1.5">
+                        <Camera className="h-3.5 w-3.5" /> Live Captured Proof Snapshot:
+                      </span>
+                      {(session.clientCaptureAt || session.serverReceiptAt) && (
+                        <span className="text-[10px] text-muted-foreground font-mono">
+                          Captured: {formatClock(session.clientCaptureAt || session.serverReceiptAt!)} IST
+                        </span>
+                      )}
+                    </div>
                     <img
                       src={session.photoDataUrl || evidencePhotoUrl || ""}
                       alt="Captured live proof"
@@ -1366,7 +1610,7 @@ function AttendanceCardDialog({
                       <Button
                         variant="outline"
                         size="sm"
-                        onClick={() => { setCapturedPhotoUrl(null); startCamera(); }}
+                        onClick={() => { setCapturedPhotoUrl(null); setCapturedPhotoAt(null); startCamera(); }}
                         className="w-full text-xs"
                       >
                         Retake / Remove Photo
@@ -1740,6 +1984,7 @@ function Dashboard({
   profile,
   sessions,
   subjects,
+  sessionsInitialLoading = false,
   onRecordErp,
   onMarkPresent,
   onMarkAbsent,
@@ -1749,15 +1994,17 @@ function Dashboard({
   profile?: StudentProfile | null;
   sessions: ClassSessionItem[];
   subjects?: SubjectItem[];
+  sessionsInitialLoading?: boolean;
   onRecordErp?: (sessionId: string, status: "Present" | "Absent") => Promise<void>;
-  onMarkPresent?: (sessionId: string, photoUrl?: string) => Promise<void>;
-  onMarkAbsent?: (sessionId: string) => Promise<void>;
+  onMarkPresent?: (sessionId: string, photoUrl?: string, note?: string, capturedAt?: string) => Promise<void>;
+  onMarkAbsent?: (sessionId: string, note?: string) => Promise<void>;
   onFreezeClass?: (sessionId: string) => Promise<void>;
 }) {
   const [selectedCardSession, setSelectedCardSession] = useState<ClassSessionItem | null>(null);
   const [cardDialogOpen, setCardDialogOpen] = useState(false);
   const [actionNotice, setActionNotice] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [photoModalInfo, setPhotoModalInfo] = useState<{ url: string; captureTime?: string | null; session?: ClassSessionItem } | null>(null);
 
   // Filters for the Attendance History dashboard embedded on the page
   const [filters, setFilters] = useState({
@@ -1981,7 +2228,13 @@ function Dashboard({
                         <span className="flex h-6 w-8 items-center justify-center rounded-md bg-primary/10 text-primary font-mono font-bold text-xs">
                           {session.slot}
                         </span>
-                        <StateBadge status={statusLabel}>{statusLabel}</StateBadge>
+                        {sessionsInitialLoading && session.personalStatus !== "present" && session.personalStatus !== "frozen" ? (
+                          <Badge variant="outline" className="text-[10px] text-muted-foreground animate-pulse">
+                            Syncing cloud...
+                          </Badge>
+                        ) : (
+                          <StateBadge status={statusLabel}>{statusLabel}</StateBadge>
+                        )}
                       </div>
 
                       <h4 className="mt-2 font-semibold text-sm line-clamp-1">{session.subjectName}</h4>
@@ -2020,18 +2273,15 @@ function Dashboard({
                           <span>Present Locked {session.serverReceiptAt ? `· ${formatClock(session.serverReceiptAt)} IST` : ""}</span>
                         </div>
                       )}
-                      {(session.photoDataUrl || session.evidenceAvailable || session.note) ? (
-                        <div className="flex items-center gap-1.5 flex-wrap mt-1 text-[10px]">
-                          {(session.photoDataUrl || session.evidenceAvailable) && (
-                            <span className="bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 px-1.5 py-0.5 rounded border border-emerald-500/20">
-                              📷 Photo
-                            </span>
-                          )}
-                          {session.note && (
-                            <span className="bg-primary/10 text-primary px-1.5 py-0.5 rounded border border-primary/20 truncate max-w-[150px]">
-                              💬 {session.note}
-                            </span>
-                          )}
+                      {(session.photoDataUrl || session.evidenceStoragePath || session.evidenceAvailable) ? (
+                        <EvidenceSnapshotThumbnail
+                          session={session}
+                          onViewImage={(url, time, s) => setPhotoModalInfo({ url, captureTime: time, session: s })}
+                        />
+                      ) : null}
+                      {session.note ? (
+                        <div className="mt-1 flex items-center gap-1 text-[10px] bg-primary/10 text-primary px-2 py-0.5 rounded border border-primary/20 truncate">
+                          💬 Keynote: {session.note}
                         </div>
                       ) : null}
                     </div>
@@ -2229,12 +2479,13 @@ function Dashboard({
                         <span>{formatClock(session.scheduledStartAt)} – {formatClock(session.scheduledEndAt)} IST</span>
                         {session.room ? <span>· Room: {session.room}</span> : null}
                       </div>
-                      {(session.photoDataUrl || session.evidenceAvailable || session.note) ? (
+                      {(session.photoDataUrl || session.evidenceStoragePath || session.evidenceAvailable || session.note) ? (
                         <div className="flex items-center gap-2 flex-wrap mt-1">
-                          {(session.photoDataUrl || session.evidenceAvailable) && (
-                            <span className="text-[11px] text-emerald-700 dark:text-emerald-300 font-medium bg-emerald-50 dark:bg-emerald-950/40 px-2 py-0.5 rounded border border-emerald-200 dark:border-emerald-800 flex items-center gap-1">
-                              📷 Photo
-                            </span>
+                          {(session.photoDataUrl || session.evidenceStoragePath || session.evidenceAvailable) && (
+                            <EvidenceSnapshotRow
+                              session={session}
+                              onViewImage={(url, time, s) => setPhotoModalInfo({ url, captureTime: time, session: s })}
+                            />
                           )}
                           {session.note && (
                             <span className="text-[11px] text-primary font-medium bg-primary/5 px-2 py-0.5 rounded border border-primary/20 flex items-center gap-1">
@@ -2246,7 +2497,13 @@ function Dashboard({
                     </div>
 
                     <div className="flex items-center gap-2.5 shrink-0 flex-wrap">
-                      <StateBadge status={statusLabel}>{statusLabel}</StateBadge>
+                      {sessionsInitialLoading && session.personalStatus !== "present" && session.personalStatus !== "frozen" ? (
+                        <Badge variant="outline" className="text-[10px] text-muted-foreground animate-pulse">
+                          Syncing cloud...
+                        </Badge>
+                      ) : (
+                        <StateBadge status={statusLabel}>{statusLabel}</StateBadge>
+                      )}
 
                       {session.erpStatus ? (
                         <Badge
@@ -2320,6 +2577,7 @@ function Dashboard({
           );
         }}
       />
+      <PhotoEvidenceModal photoInfo={photoModalInfo} onClose={() => setPhotoModalInfo(null)} />
     </>
   );
 }
@@ -2714,6 +2972,7 @@ function AttendanceHistory({
   user,
   sessions,
   subjects,
+  sessionsInitialLoading = false,
   onRecordErp,
   onMarkPresent,
   onMarkAbsent,
@@ -2722,13 +2981,15 @@ function AttendanceHistory({
   user?: FirebaseUser | null;
   sessions: ClassSessionItem[];
   subjects: SubjectItem[];
+  sessionsInitialLoading?: boolean;
   onRecordErp?: (sessionId: string, status: "Present" | "Absent") => Promise<void>;
-  onMarkPresent?: (sessionId: string, photoUrl?: string) => Promise<void>;
-  onMarkAbsent?: (sessionId: string) => Promise<void>;
+  onMarkPresent?: (sessionId: string, photoUrl?: string, note?: string, capturedAt?: string) => Promise<void>;
+  onMarkAbsent?: (sessionId: string, note?: string) => Promise<void>;
   onFreezeClass?: (sessionId: string) => Promise<void>;
 }) {
   const [selectedSession, setSelectedSession] = useState<ClassSessionItem | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [photoModalInfo, setPhotoModalInfo] = useState<{ url: string; captureTime?: string | null; session?: ClassSessionItem } | null>(null);
 
   const [filters, setFilters] = useState({
     subjectId: "",
@@ -2938,12 +3199,13 @@ function AttendanceHistory({
                         <span>{formatClock(session.scheduledStartAt)} – {formatClock(session.scheduledEndAt)} IST</span>
                         {session.room ? <span>· Room: {session.room}</span> : null}
                       </div>
-                      {(session.photoDataUrl || session.evidenceAvailable || session.note) ? (
+                      {(session.photoDataUrl || session.evidenceStoragePath || session.evidenceAvailable || session.note) ? (
                         <div className="flex items-center gap-2 flex-wrap mt-1">
-                          {(session.photoDataUrl || session.evidenceAvailable) && (
-                            <span className="text-[11px] text-emerald-700 dark:text-emerald-300 font-medium bg-emerald-50 dark:bg-emerald-950/40 px-2 py-0.5 rounded border border-emerald-200 dark:border-emerald-800 flex items-center gap-1">
-                              📷 Photo
-                            </span>
+                          {(session.photoDataUrl || session.evidenceStoragePath || session.evidenceAvailable) && (
+                            <EvidenceSnapshotRow
+                              session={session}
+                              onViewImage={(url, time, s) => setPhotoModalInfo({ url, captureTime: time, session: s })}
+                            />
                           )}
                           {session.note && (
                             <span className="text-[11px] text-primary font-medium bg-primary/5 px-2 py-0.5 rounded border border-primary/20 flex items-center gap-1">
@@ -2955,7 +3217,13 @@ function AttendanceHistory({
                     </div>
 
                     <div className="flex items-center gap-2.5 shrink-0 flex-wrap">
-                      <StateBadge status={statusLabel}>{statusLabel}</StateBadge>
+                      {sessionsInitialLoading && session.personalStatus !== "present" && session.personalStatus !== "frozen" ? (
+                        <Badge variant="outline" className="text-[10px] text-muted-foreground animate-pulse">
+                          Syncing cloud...
+                        </Badge>
+                      ) : (
+                        <StateBadge status={statusLabel}>{statusLabel}</StateBadge>
+                      )}
 
                       {session.erpStatus ? (
                         <Badge
@@ -3033,6 +3301,7 @@ function AttendanceHistory({
           }}
         />
       ) : null}
+      <PhotoEvidenceModal photoInfo={photoModalInfo} onClose={() => setPhotoModalInfo(null)} />
     </>
   );
 }
@@ -3846,7 +4115,7 @@ function SessionDetail({
   sessionId: string;
   sessions: ClassSessionItem[];
   onRecordErp?: (sessionId: string, status: "Present" | "Absent") => Promise<void>;
-  onMarkPresent?: (sessionId: string, photoUrl?: string) => Promise<void>;
+  onMarkPresent?: (sessionId: string, photoUrl?: string, note?: string, capturedAt?: string) => Promise<void>;
 }) {
   const session = sessions.find((s) => s.id === sessionId);
   const [events, setEvents] = useState<AttendanceEventItem[]>([]);
@@ -3858,6 +4127,7 @@ function SessionDetail({
   // Live Camera state
   const [cameraActive, setCameraActive] = useState(false);
   const [capturedPhotoUrl, setCapturedPhotoUrl] = useState<string | null>(null);
+  const [capturedPhotoAt, setCapturedPhotoAt] = useState<string | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
 
@@ -3922,7 +4192,9 @@ function SessionDetail({
     if (ctx) {
       ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
       const dataUrl = canvas.toDataURL("image/jpeg", 0.7);
+      const captureInstant = new Date().toISOString();
       setCapturedPhotoUrl(dataUrl);
+      setCapturedPhotoAt(captureInstant);
     }
     // Stop camera stream
     if (streamRef.current) {
@@ -3939,10 +4211,10 @@ function SessionDetail({
     setMessage("");
     try {
       if (onMarkPresent) {
-        await onMarkPresent(session.id, capturedPhotoUrl || undefined);
+        await onMarkPresent(session.id, capturedPhotoUrl || undefined, undefined, capturedPhotoAt || undefined);
         setMessage("Attendance marked Present on AttendWise.");
       } else {
-        const res = await markSessionPresent(user.uid, session.id, capturedPhotoUrl || undefined);
+        const res = await markSessionPresent(user.uid, session.id, capturedPhotoUrl || undefined, undefined, capturedPhotoAt || undefined);
         setMessage(res.message);
       }
     } catch (err: any) {
@@ -4084,15 +4356,22 @@ function SessionDetail({
                 </div>
               </div>
 
-              {(session.photoDataUrl || session.evidenceAvailable) ? (
+              {(session.photoDataUrl || session.evidenceStoragePath || session.evidenceAvailable) ? (
                 <div className="rounded-lg border bg-muted/30 p-3 space-y-1.5">
-                  <p className="text-xs font-semibold text-emerald-800 dark:text-emerald-300 flex items-center gap-1.5">
-                    <Camera className="h-3.5 w-3.5" /> Captured Proof Photo (Locked)
-                  </p>
+                  <div className="flex items-center justify-between text-xs font-semibold text-emerald-800 dark:text-emerald-300">
+                    <span className="flex items-center gap-1.5">
+                      <Camera className="h-3.5 w-3.5" /> Captured Proof Photo (Locked)
+                    </span>
+                    {(session.clientCaptureAt || session.serverReceiptAt) && (
+                      <span className="text-[11px] font-mono text-muted-foreground font-normal">
+                        Captured: {formatClock(session.clientCaptureAt || session.serverReceiptAt!)} IST
+                      </span>
+                    )}
+                  </div>
                   {session.photoDataUrl ? (
                     <img src={session.photoDataUrl} alt="Captured proof" className="w-full h-44 object-cover rounded-md border" />
                   ) : (
-                    <p className="text-xs text-muted-foreground">Proof photo recorded in secure storage.</p>
+                    <EvidenceSnapshotThumbnail session={session} />
                   )}
                 </div>
               ) : null}
@@ -4462,6 +4741,7 @@ export default function App() {
   const [subjects, setSubjects] = useState<SubjectItem[]>([]);
   const [timetable, setTimetable] = useState<TimetableItem[]>([]);
   const [sessions, setSessions] = useState<ClassSessionItem[]>([]);
+  const [sessionsInitialLoading, setSessionsInitialLoading] = useState(true);
   const [, setLocation] = useLocation();
 
   // Listen to Firebase Auth state
@@ -4505,6 +4785,7 @@ export default function App() {
       setSubjects([]);
       setTimetable([]);
       setSessions([]);
+      setSessionsInitialLoading(true);
       return;
     }
 
@@ -4517,16 +4798,20 @@ export default function App() {
     // If local student session overrides exist in localStorage, restore them
     const localStoreKey = `attendwise_student_sessions_${user.uid}`;
     let initialSessions = defaultData.sessions;
+    let hasConfirmedLocalData = false;
     try {
       const stored = localStorage.getItem(localStoreKey);
       if (stored) {
         const parsed = JSON.parse(stored) as Record<string, Partial<ClassSessionItem>>;
-        initialSessions = defaultData.sessions.map((s) => {
-          if (parsed[s.id]) {
-            return { ...s, ...parsed[s.id] };
-          }
-          return s;
-        });
+        if (Object.keys(parsed).length > 0) {
+          hasConfirmedLocalData = true;
+          initialSessions = defaultData.sessions.map((s) => {
+            if (parsed[s.id]) {
+              return { ...s, ...parsed[s.id] };
+            }
+            return s;
+          });
+        }
       }
     } catch (e) {
       console.warn("Failed to load student local session overrides:", e);
@@ -4535,6 +4820,28 @@ export default function App() {
     setSubjects(defaultData.subjects);
     setTimetable(defaultData.timetable);
     setSessions(initialSessions);
+    if (hasConfirmedLocalData) {
+      setSessionsInitialLoading(false);
+    }
+
+    // Fast IndexedDB cache check for instant rendering
+    dataManager
+      .getCachedDashboardData(user.uid)
+      .then((cached) => {
+        if (cached?.sessions && cached.sessions.length > 0) {
+          setSessions((current) => {
+            const hasServerData = current.some((s) => s.serverReceiptAt);
+            if (!hasServerData) {
+              return cached.sessions;
+            }
+            return current;
+          });
+        }
+      })
+      .catch((err) => {
+        console.warn("Cache hydration notice:", err);
+      });
+
     setProfile({
       id: user.uid,
       displayName: user.displayName || "Student",
@@ -4607,6 +4914,7 @@ export default function App() {
           if (snap.empty) {
             // Keep the default sessions and trigger background seeding
             ensureSistecTimetableLoaded(user.uid).catch(console.warn);
+            setSessionsInitialLoading(false);
             return;
           }
 
@@ -4645,6 +4953,7 @@ export default function App() {
           });
 
           setSessions(mergedList);
+          setSessionsInitialLoading(false);
 
           // Synchronize local cache with confirmed Firestore state
           try {
@@ -4656,6 +4965,8 @@ export default function App() {
                   erpStatus: sess.erpStatus,
                   note: sess.note,
                   evidenceAvailable: sess.evidenceAvailable,
+                  evidenceStoragePath: sess.evidenceStoragePath,
+                  clientCaptureAt: sess.clientCaptureAt,
                   photoDataUrl: sess.photoDataUrl && !sess.photoDataUrl.startsWith("data:") ? sess.photoDataUrl : undefined,
                   finalized: sess.finalized,
                   finalizedAt: sess.finalizedAt,
@@ -4664,6 +4975,7 @@ export default function App() {
               }
             });
             localStorage.setItem(localStoreKey, JSON.stringify(syncCache));
+            void setCachedStore("sessions", mergedList).catch(() => {});
           } catch (syncErr) {
             console.warn("Local cache sync notice:", syncErr);
           }
@@ -4698,6 +5010,7 @@ export default function App() {
     setSubjects([]);
     setTimetable([]);
     setSessions([]);
+    setSessionsInitialLoading(true);
     setLocation("/");
   };
 
@@ -4744,12 +5057,13 @@ export default function App() {
     }
   };
 
-  const handleMarkPresentQuick = async (sessionId: string, photoUrl?: string, note?: string) => {
+  const handleMarkPresentQuick = async (sessionId: string, photoUrl?: string, note?: string, capturedAt?: string) => {
     if (!user || !auth.currentUser || auth.currentUser.uid !== user.uid) {
       throw new Error("You must be logged in as an authenticated student to record attendance.");
     }
     const prevSession = sessions.find((s) => s.id === sessionId);
     const nowIso = new Date().toISOString();
+    const finalCapturedAt = capturedAt || (photoUrl ? nowIso : undefined);
 
     // 1. Instant optimistic update:
     setSessions((prev) =>
@@ -4761,6 +5075,7 @@ export default function App() {
               finalized: true,
               finalizedAt: nowIso,
               serverReceiptAt: nowIso,
+              clientCaptureAt: finalCapturedAt || s.clientCaptureAt,
               photoDataUrl: photoUrl || s.photoDataUrl,
               evidenceAvailable: Boolean(photoUrl || s.photoDataUrl || s.evidenceAvailable),
               note: note !== undefined ? note : s.note,
@@ -4771,12 +5086,13 @@ export default function App() {
 
     // 2. Persist to Firestore with rollback on error:
     try {
-      await markSessionPresent(user.uid, sessionId, photoUrl, note);
+      await markSessionPresent(user.uid, sessionId, photoUrl, note, finalCapturedAt);
       persistLocalSessionOverride(sessionId, {
         personalStatus: "present",
         finalized: true,
         finalizedAt: nowIso,
         serverReceiptAt: nowIso,
+        clientCaptureAt: finalCapturedAt || prevSession?.clientCaptureAt,
         evidenceAvailable: Boolean(photoUrl || prevSession?.photoDataUrl || prevSession?.evidenceAvailable),
         ...(note !== undefined ? { note } : {}),
       });
@@ -4914,6 +5230,7 @@ export default function App() {
                     profile={profile}
                     sessions={sessions}
                     subjects={subjects}
+                    sessionsInitialLoading={sessionsInitialLoading}
                     onRecordErp={handleRecordErp}
                     onMarkPresent={handleMarkPresentQuick}
                     onMarkAbsent={handleMarkAbsentQuick}
@@ -4929,6 +5246,7 @@ export default function App() {
                     profile={profile}
                     sessions={sessions}
                     subjects={subjects}
+                    sessionsInitialLoading={sessionsInitialLoading}
                     onRecordErp={handleRecordErp}
                     onMarkPresent={handleMarkPresentQuick}
                     onMarkAbsent={handleMarkAbsentQuick}
@@ -4962,6 +5280,7 @@ export default function App() {
                     user={user}
                     sessions={sessions}
                     subjects={subjects}
+                    sessionsInitialLoading={sessionsInitialLoading}
                     onRecordErp={handleRecordErp}
                     onMarkPresent={handleMarkPresentQuick}
                     onMarkAbsent={handleMarkAbsentQuick}
