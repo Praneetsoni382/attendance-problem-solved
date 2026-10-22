@@ -10,6 +10,17 @@
     "start": "serve -s dist -l $PORT",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
+  "dependencies": {
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "firebase": "^13.0.0",
+    "wouter": "^3.3.5",
+    "lucide-react": "^0.545.0",
+    "vite": "^7.3.2",
+    "@vitejs/plugin-react": "^5.0.4",
+    "@tailwindcss/vite": "^4.1.14",
+    "tailwindcss": "^4.1.14"
+  },
   "devDependencies": {
     "@hookform/resolvers": "^3.10.0",
     "@radix-ui/react-accordion": "^1.2.4",
