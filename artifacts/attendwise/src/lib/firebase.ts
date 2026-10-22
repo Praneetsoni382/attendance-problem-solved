@@ -764,40 +764,6 @@ export function buildDefaultSistecData(uid: string): {
     pyDayNum++;
   }
 
-  // Period 7 Test Class for today only (7:00 PM to 11:00 PM Indian Standard Time)
-  const todayKey = formatDateKey(new Date());
-  const testSessionStart = makeIstDateTime(todayKey, "19:00");
-  const testSessionEnd = makeIstDateTime(todayKey, "23:00");
-  const isTestOverdue = now.getTime() >= testSessionEnd.getTime();
-  const testSessionId = `session-test-class-p7-${todayKey}`;
-
-  sessions.push({
-    id: testSessionId,
-    studentId: uid,
-    subjectId: "sub-test-class-p7",
-    subjectName: "Test Class",
-    subjectCode: "TEST-P7",
-    timetableEntryId: null, // Strictly null: does not enter daily timetable schedule
-    slot: "P7",
-    scheduledDate: todayKey,
-    scheduledStartAt: testSessionStart.toISOString(),
-    scheduledEndAt: testSessionEnd.toISOString(),
-    category: "Theory",
-    room: "Room 101 / Testing",
-    personalStatus: isTestOverdue ? "absent" : "upcoming",
-    erpStatus: null,
-    note: null,
-    canMarkPresent: true,
-    finalized: isTestOverdue,
-    finalizedAt: isTestOverdue ? testSessionEnd.toISOString() : null,
-    serverReceiptAt: null,
-    clientCaptureAt: null,
-    cancelledAt: null,
-    evidenceAvailable: false,
-    academicDayNumber: 99,
-    createdAt: now.toISOString(),
-  });
-
   return { subjects, timetable, sessions };
 }
 
@@ -819,30 +785,6 @@ export async function generateWeeklySessions(uid: string): Promise<void> {
     const existingSessionsSnap = await getDocs(sessionsRef);
     const existingDateIds = new Set<string>();
 
-    for (const sDoc of existingSessionsSnap.docs) {
-      const sData = sDoc.data() as ClassSessionItem;
-      existingDateIds.add(sDoc.id);
-
-      if (
-        sData.subjectId === PYTHON_TRAINING_SUBJECT.id ||
-        (sData as any).isSpecialTraining ||
-        sData.slot === "P7" ||
-        sData.id.startsWith("session-test-class-p7")
-      ) {
-        continue; // Never delete Python Training sessions or Period 7 Test Class
-      }
-
-      if (!isTeachingDay(sData.scheduledDate)) {
-        try {
-          await deleteDoc(sDoc.ref);
-          existingDateIds.delete(sDoc.id);
-        } catch {
-          // Ignore deletion error
-        }
-      }
-    }
-
-    const now = new Date();
     let batch = writeBatch(db);
     let opCount = 0;
 
@@ -853,6 +795,51 @@ export async function generateWeeklySessions(uid: string): Promise<void> {
         opCount = 0;
       }
     };
+
+    for (const sDoc of existingSessionsSnap.docs) {
+      const sData = sDoc.data() as ClassSessionItem;
+      existingDateIds.add(sDoc.id);
+
+      if (
+        sData.subjectId === PYTHON_TRAINING_SUBJECT.id ||
+        (sData as any).isSpecialTraining
+      ) {
+        continue; // Never delete Python Training sessions
+      }
+
+      // Purge P7 test class / slot P7 sessions permanently from database and dashboards
+      if (
+        sData.slot === "P7" ||
+        sData.subjectId === "sub-test-class-p7" ||
+        sData.id.startsWith("session-test-class-p7")
+      ) {
+        try {
+          batch.delete(sDoc.ref);
+          opCount++;
+          if (opCount >= 400) await commitBatch();
+          existingDateIds.delete(sDoc.id);
+          continue;
+        } catch {
+          // Ignore deletion error
+        }
+      }
+
+      if (!isTeachingDay(sData.scheduledDate)) {
+        try {
+          batch.delete(sDoc.ref);
+          opCount++;
+          if (opCount >= 400) await commitBatch();
+          existingDateIds.delete(sDoc.id);
+        } catch {
+          // Ignore deletion error
+        }
+      }
+    }
+    await commitBatch();
+
+    const now = new Date();
+    batch = writeBatch(db);
+    opCount = 0;
 
     const teachingDateKeys = Object.keys(BTECH_3RD_TEACHING_DAYS);
 
