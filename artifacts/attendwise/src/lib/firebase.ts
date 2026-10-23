@@ -964,26 +964,35 @@ export {
   BTECH_3RD_TEACHING_DAYS,
 };
 
-// Mark Present inside the exact scheduled window
-// Mark Present inside the exact scheduled window (Permanent & Immutable one-time save)
-export async function markSessionPresent(
+// Atomic Complete Attendance & Evidence Saver (Unified Cloud Firestore Transaction)
+export interface CompleteAttendancePayload {
+  personalStatus: "present" | "absent";
+  erpStatus?: "Present" | "Absent" | null;
+  note?: string | null;
+  photoDataUrl?: string | null;
+  clientCapturedAt?: string | null;
+}
+
+export async function saveCompleteAttendanceRecord(
   uid: string,
   sessionId: string,
-  evidenceDataUrl?: string,
-  note?: string,
-  clientCapturedAt?: string
-): Promise<{ success: boolean; message: string }> {
-  const receiptAt = new Date().toISOString();
-  const captureTimestamp = clientCapturedAt || receiptAt;
+  payload: CompleteAttendancePayload
+): Promise<{ success: boolean; session: ClassSessionItem; message: string }> {
+  if (!uid) {
+    throw new Error("Student authentication required to record attendance.");
+  }
 
-  // 1. Upload photo evidence to Firebase Storage if provided (pre-transaction to keep transaction atomic & fast)
+  const receiptAt = new Date().toISOString();
+  const captureTimestamp = payload.clientCapturedAt || receiptAt;
+
+  // 1. Upload photo evidence to Firebase Storage if provided (performed pre-transaction)
   let storageDownloadUrl: string | null = null;
   let storagePath: string | null = null;
-  if (evidenceDataUrl && evidenceDataUrl.startsWith("data:")) {
+  if (payload.photoDataUrl && payload.photoDataUrl.startsWith("data:")) {
     try {
       storagePath = `users/${uid}/attendance/${sessionId}/${Date.now()}.jpg`;
       const storageRef = ref(storage, storagePath);
-      await uploadString(storageRef, evidenceDataUrl, "data_url", {
+      await uploadString(storageRef, payload.photoDataUrl, "data_url", {
         contentType: "image/jpeg",
         customMetadata: {
           sessionId,
@@ -993,13 +1002,13 @@ export async function markSessionPresent(
       });
       storageDownloadUrl = await getDownloadURL(storageRef);
     } catch (storageErr) {
-      console.warn("Storage upload notice (falling back to inline dataUrl persistence):", storageErr);
+      console.warn("Storage upload notice (falling back to inline persistence if small):", storageErr);
     }
   }
 
   const sessionRef = doc(db, "users", uid, "classSessions", sessionId);
 
-  return await runTransaction(db, async (transaction) => {
+  const updatedSession = await runTransaction(db, async (transaction) => {
     const sessionSnap = await transaction.get(sessionRef);
     let session: ClassSessionItem;
 
@@ -1014,12 +1023,9 @@ export async function markSessionPresent(
       session = sessionSnap.data() as ClassSessionItem;
     }
 
-    // Strict Permanent Lock Check: Present is permanently immutable
-    if (session.personalStatus === "present") {
+    // Strict Permanent Immutability: Present can never be converted to Absent
+    if (session.personalStatus === "present" && payload.personalStatus !== "present") {
       throw new Error("Attendance for this class session has already been recorded as Present and is permanently locked.");
-    }
-    if (session.finalized && session.personalStatus !== "upcoming" && session.personalStatus !== "unmarked") {
-      throw new Error("Attendance for this class session has already been finalized and is uneditable.");
     }
     if (session.personalStatus === "frozen") {
       throw new Error("Cannot mark attendance for a frozen class session.");
@@ -1030,7 +1036,7 @@ export async function markSessionPresent(
 
     const isHistoricalTraining = session.subjectId === PYTHON_TRAINING_SUBJECT.id || (session as any).isSpecialTraining;
 
-    if (!isHistoricalTraining) {
+    if (!isHistoricalTraining && payload.personalStatus === "present" && session.personalStatus !== "present") {
       const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" }).format(new Date());
       if (session.scheduledDate !== today) {
         throw new Error("Attendance can only be marked for today's scheduled classes.");
@@ -1040,14 +1046,12 @@ export async function markSessionPresent(
       const startMs = new Date(session.scheduledStartAt).getTime();
       const endMs = new Date(session.scheduledEndAt).getTime();
 
-      // Strict interval check: scheduledStart <= trustedServerTime < scheduledEnd
       if (now < startMs) {
         const diffMins = Math.ceil((startMs - now) / 60000);
         throw new Error(`Attendance window has not opened yet. Class begins in ${diffMins} minute(s).`);
       }
 
       if (now >= endMs) {
-        // Automatically finalize as absent only if window has elapsed
         transaction.set(sessionRef, {
           ...session,
           personalStatus: "absent",
@@ -1059,46 +1063,72 @@ export async function markSessionPresent(
       }
     }
 
-    const cleanNote = note?.trim() || session.note || null;
-    const finalPhotoUrl = storageDownloadUrl || evidenceDataUrl || session.photoDataUrl || null;
+    // Resolve ERP status locking
+    let finalErpStatus = session.erpStatus;
+    let finalErpRecordedAt = session.erpRecordedAt;
+    if (payload.erpStatus !== undefined && payload.erpStatus !== null) {
+      if (session.erpStatus !== null && session.erpStatus !== undefined && session.erpStatus !== payload.erpStatus) {
+        throw new Error(`ERP attendance is already permanently recorded as ${session.erpStatus} and is uneditable.`);
+      }
+      finalErpStatus = payload.erpStatus;
+      finalErpRecordedAt = session.erpRecordedAt || receiptAt;
+    }
+
+    const cleanNote = payload.note !== undefined ? (payload.note?.trim() || null) : (session.note || null);
+    const safeDataUrl = payload.photoDataUrl && payload.photoDataUrl.startsWith("data:") && payload.photoDataUrl.length < 80000
+      ? payload.photoDataUrl
+      : null;
+    const finalPhotoUrl = storageDownloadUrl || safeDataUrl || session.photoDataUrl || null;
     const finalStoragePath = storagePath || session.evidenceStoragePath || null;
     const hasPhoto = Boolean(finalPhotoUrl || finalStoragePath);
 
-    // Atomically persist Present status, server receipt timestamp, durable photo reference, and keynote
-    transaction.set(sessionRef, {
+    const result: ClassSessionItem = {
       ...session,
-      personalStatus: "present",
+      personalStatus: payload.personalStatus,
+      absentType: payload.personalStatus === "absent" ? (session.absentType || "manual_student") : null,
       finalized: true,
-      finalizedAt: receiptAt,
-      serverReceiptAt: receiptAt,
-      clientCaptureAt: captureTimestamp,
+      finalizedAt: session.finalizedAt || receiptAt,
+      serverReceiptAt: payload.personalStatus === "present" ? (session.serverReceiptAt || receiptAt) : session.serverReceiptAt,
+      clientCaptureAt: payload.personalStatus === "present" ? captureTimestamp : session.clientCaptureAt,
       evidenceAvailable: hasPhoto,
       photoDataUrl: finalPhotoUrl,
       evidenceStoragePath: finalStoragePath,
       note: cleanNote,
-    }, { merge: true });
+      erpStatus: finalErpStatus,
+      erpRecordedAt: finalErpRecordedAt,
+    };
 
-    // Record authoritative audit event
+    transaction.set(sessionRef, result, { merge: true });
+
+    // Record authoritative audit events
     const eventRef = doc(db, "users", uid, "attendanceEvents", `event-${sessionId}-${Date.now()}`);
     transaction.set(eventRef, {
       id: `event-${sessionId}-${Date.now()}`,
       sessionId,
-      eventType: isHistoricalTraining ? "training_present_marked" : "present_marked",
+      eventType: payload.personalStatus === "present" ? "attendance_marked_present" : "attendance_marked_absent",
       serverTimestamp: receiptAt,
-      message: isHistoricalTraining
-        ? "Python Training attendance marked Present by student."
-        : hasPhoto
-        ? "Attendance marked Present with live photo context and server receipt time."
-        : "Attendance marked Present with server receipt time.",
+      message: payload.personalStatus === "present"
+        ? `Attendance marked Present with server receipt time.${finalErpStatus ? ` ERP: ${finalErpStatus}.` : ""}`
+        : `Attendance marked Absent by student.${finalErpStatus ? ` ERP: ${finalErpStatus}.` : ""}`,
     });
 
-    // Also persist metadata document for storage continuity
-    if (evidenceDataUrl || finalPhotoUrl || finalStoragePath) {
+    if (finalErpStatus && (!session.erpStatus || session.erpStatus !== finalErpStatus)) {
+      const erpEventRef = doc(db, "users", uid, "attendanceEvents", `event-erp-${sessionId}-${Date.now()}`);
+      transaction.set(erpEventRef, {
+        id: `event-erp-${sessionId}-${Date.now()}`,
+        sessionId,
+        eventType: "erp_status_recorded",
+        serverTimestamp: receiptAt,
+        message: `ERP status recorded as ${finalErpStatus} (Permanent & Uneditable).`,
+      });
+    }
+
+    if (storageDownloadUrl || finalStoragePath || safeDataUrl) {
       const metaRef = doc(db, "users", uid, "evidenceMetadata", `meta-${sessionId}`);
       transaction.set(metaRef, {
         id: `meta-${sessionId}`,
         sessionId,
-        dataUrl: evidenceDataUrl || null,
+        dataUrl: safeDataUrl,
         storageUrl: storageDownloadUrl || null,
         storagePath: finalStoragePath,
         clientCapturedAt: captureTimestamp,
@@ -1106,8 +1136,31 @@ export async function markSessionPresent(
       });
     }
 
-    return { success: true, message: "Attendance recorded as Present (Verified & Uneditable)." };
+    return result;
   });
+
+  return {
+    success: true,
+    session: updatedSession,
+    message: "Attendance record and evidence saved and verified in Cloud Firestore.",
+  };
+}
+
+// Mark Present inside the exact scheduled window (delegates to atomic complete saver)
+export async function markSessionPresent(
+  uid: string,
+  sessionId: string,
+  evidenceDataUrl?: string,
+  note?: string,
+  clientCapturedAt?: string
+): Promise<{ success: boolean; message: string }> {
+  const res = await saveCompleteAttendanceRecord(uid, sessionId, {
+    personalStatus: "present",
+    photoDataUrl: evidenceDataUrl,
+    note,
+    clientCapturedAt,
+  });
+  return { success: true, message: res.message };
 }
 
 // Resolve evidence download URL durably from session fields, Storage reference, or evidenceMetadata fallback

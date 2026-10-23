@@ -61,6 +61,8 @@ import {
   ensurePythonTrainingLoaded,
   syncTimetableSlotTimings,
   buildDefaultSistecData,
+  saveCompleteAttendanceRecord,
+  type CompleteAttendancePayload,
   markSessionPresent,
   markSessionAbsent,
   recordSessionErpStatus,
@@ -1145,6 +1147,7 @@ function AttendanceCardDialog({
   onMarkPresent,
   onMarkAbsent,
   onFreezeClass,
+  onSaveCompleteAttendance,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -1155,6 +1158,7 @@ function AttendanceCardDialog({
   onMarkPresent?: (sessionId: string, photoUrl?: string, note?: string, capturedAt?: string) => Promise<void>;
   onMarkAbsent?: (sessionId: string, note?: string) => Promise<void>;
   onFreezeClass?: (sessionId: string) => Promise<void>;
+  onSaveCompleteAttendance?: (sessionId: string, payload: CompleteAttendancePayload) => Promise<void>;
 }) {
   // Always derive the most authoritative, live session state from the parent sessions listener
   const session = initialSession
@@ -1346,48 +1350,33 @@ function AttendanceCardDialog({
     if (!session || !user) return;
     setBusy(true);
     setError(null);
-    setNotice(null);
+    setNotice("Committing attendance, photo proof & ERP to Cloud Firestore...");
     try {
       const finalNote = stagedNote.trim() || noteInput.trim() || undefined;
-      let personalAttendanceHandled = false;
 
-      // 1. Mark AttendWise Present (only allowed if not already present)
-      if (stagedPersonalStatus === "present" && session.personalStatus !== "present") {
-        if (onMarkPresent) {
-          await onMarkPresent(session.id, capturedPhotoUrl || undefined, finalNote, capturedPhotoAt || undefined);
-        } else {
-          await markSessionPresent(user.uid, session.id, capturedPhotoUrl || undefined, finalNote, capturedPhotoAt || undefined);
-        }
-        personalAttendanceHandled = true;
-      } else if (stagedPersonalStatus === "absent" && session.personalStatus !== "absent") {
-        if (onMarkAbsent) {
-          await onMarkAbsent(session.id, finalNote);
-        } else {
-          await markSessionAbsent(user.uid, session.id, finalNote);
-        }
-        personalAttendanceHandled = true;
+      const targetPersonalStatus: "present" | "absent" =
+        stagedPersonalStatus === "absent" ? "absent" : "present";
+
+      const payload: CompleteAttendancePayload = {
+        personalStatus: targetPersonalStatus,
+        erpStatus: (stagedErpStatus as any) || undefined,
+        note: finalNote,
+        photoDataUrl: capturedPhotoUrl || undefined,
+        clientCapturedAt: capturedPhotoAt || undefined,
+      };
+
+      if (onSaveCompleteAttendance) {
+        await onSaveCompleteAttendance(session.id, payload);
+      } else {
+        await saveCompleteAttendanceRecord(user.uid, session.id, payload);
       }
 
-      // 2. Mark College ERP Status (independent, one-time locked)
-      if (stagedErpStatus && !session.erpStatus) {
-        if (onRecordErp) {
-          await onRecordErp(session.id, stagedErpStatus as any);
-        } else {
-          await recordSessionErpStatus(user.uid, session.id, stagedErpStatus as any);
-        }
-      }
-
-      // 3. Save Keynote if not already saved as part of marking Present or Absent
-      if (!personalAttendanceHandled && finalNote && (!session.note || session.note.trim() !== finalNote.trim())) {
-        await updateSessionNote(user.uid, session.id, finalNote);
-      }
-
-      setNotice("All attendance status, photo proof, and keynote saved permanently in Cloud Firestore!");
+      setNotice("Cloud Verified: Attendance, photo proof & ERP permanently saved in Firestore!");
       setTimeout(() => {
         onOpenChange(false);
       }, 700);
     } catch (err: any) {
-      setError(err?.message || "Could not save status.");
+      setError(err?.message || "Could not save attendance to cloud.");
     } finally {
       setBusy(false);
     }
@@ -1989,6 +1978,7 @@ function Dashboard({
   onMarkPresent,
   onMarkAbsent,
   onFreezeClass,
+  onSaveCompleteAttendance,
 }: {
   user: FirebaseUser;
   profile?: StudentProfile | null;
@@ -1999,6 +1989,7 @@ function Dashboard({
   onMarkPresent?: (sessionId: string, photoUrl?: string, note?: string, capturedAt?: string) => Promise<void>;
   onMarkAbsent?: (sessionId: string, note?: string) => Promise<void>;
   onFreezeClass?: (sessionId: string) => Promise<void>;
+  onSaveCompleteAttendance?: (sessionId: string, payload: CompleteAttendancePayload) => Promise<void>;
 }) {
   const [selectedCardSession, setSelectedCardSession] = useState<ClassSessionItem | null>(null);
   const [cardDialogOpen, setCardDialogOpen] = useState(false);
@@ -2560,6 +2551,7 @@ function Dashboard({
         onRecordErp={onRecordErp}
         onMarkPresent={onMarkPresent}
         onMarkAbsent={onMarkAbsent}
+        onSaveCompleteAttendance={onSaveCompleteAttendance}
         onFreezeClass={async (sid) => {
           if (onFreezeClass) {
             await onFreezeClass(sid);
@@ -2977,6 +2969,7 @@ function AttendanceHistory({
   onMarkPresent,
   onMarkAbsent,
   onFreezeClass,
+  onSaveCompleteAttendance,
 }: {
   user?: FirebaseUser | null;
   sessions: ClassSessionItem[];
@@ -2986,6 +2979,7 @@ function AttendanceHistory({
   onMarkPresent?: (sessionId: string, photoUrl?: string, note?: string, capturedAt?: string) => Promise<void>;
   onMarkAbsent?: (sessionId: string, note?: string) => Promise<void>;
   onFreezeClass?: (sessionId: string) => Promise<void>;
+  onSaveCompleteAttendance?: (sessionId: string, payload: CompleteAttendancePayload) => Promise<void>;
 }) {
   const [selectedSession, setSelectedSession] = useState<ClassSessionItem | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -3283,6 +3277,7 @@ function AttendanceHistory({
           onRecordErp={onRecordErp}
           onMarkPresent={onMarkPresent}
           onMarkAbsent={onMarkAbsent}
+          onSaveCompleteAttendance={onSaveCompleteAttendance}
           onFreezeClass={async (sid) => {
             if (onFreezeClass) {
               await onFreezeClass(sid);
@@ -4824,12 +4819,6 @@ export default function App() {
       .then((cached) => {
         if (cached?.sessions && cached.sessions.length > 0) {
           setSessions((current) => {
-            const currentHasStatus = current.some(
-              (s) => s.personalStatus === "present" || s.personalStatus === "absent" || s.personalStatus === "frozen" || s.serverReceiptAt
-            );
-            if (!currentHasStatus) {
-              return cached.sessions;
-            }
             const cacheMap = new Map<string, ClassSessionItem>();
             cached.sessions.forEach((cs) => {
               cacheMap.set(cs.id, cs);
@@ -4838,12 +4827,19 @@ export default function App() {
               }
             });
             return current.map((s) => {
-              if (s.personalStatus === "present" || s.personalStatus === "absent" || s.personalStatus === "frozen") {
-                return s;
-              }
               const cachedMatch = cacheMap.get(s.id) || cacheMap.get(`${s.scheduledDate}_${s.slot}`);
-              if (cachedMatch && cachedMatch.personalStatus !== "upcoming" && cachedMatch.personalStatus !== "unmarked") {
-                return { ...s, ...cachedMatch };
+              if (cachedMatch) {
+                // If the cached record has confirmed attendance (present, frozen, server receipt, ERP, or keynote),
+                // it takes precedence over default template values!
+                if (
+                  cachedMatch.personalStatus === "present" ||
+                  cachedMatch.personalStatus === "frozen" ||
+                  cachedMatch.serverReceiptAt ||
+                  cachedMatch.erpStatus ||
+                  cachedMatch.note
+                ) {
+                  return { ...s, ...cachedMatch };
+                }
               }
               return s;
             });
@@ -5059,17 +5055,88 @@ export default function App() {
     }
   };
 
-  // Real-time optimistic action handlers for instant feedback on user actions:
+  // Real-time optimistic action handlers using functional state updates (Zero stale-closure risk)
+  const handleSaveCompleteAttendance = async (
+    sessionId: string,
+    payload: CompleteAttendancePayload
+  ) => {
+    if (!user || !auth.currentUser || auth.currentUser.uid !== user.uid) {
+      throw new Error("You must be logged in as an authenticated student to record attendance.");
+    }
+    const prevSession = sessions.find((s) => s.id === sessionId);
+    const nowIso = new Date().toISOString();
+    const finalCapturedAt = payload.clientCapturedAt || (payload.photoDataUrl ? nowIso : undefined);
+    const cleanNote = payload.note !== undefined ? (payload.note?.trim() || null) : undefined;
+
+    // 1. Instant optimistic update using functional state updater
+    setSessions((prev) => {
+      const updated = prev.map((s) => {
+        if (s.id !== sessionId) return s;
+        return {
+          ...s,
+          personalStatus: payload.personalStatus,
+          absentType: payload.personalStatus === "absent" ? ("manual_student" as const) : null,
+          finalized: true,
+          finalizedAt: nowIso,
+          serverReceiptAt: payload.personalStatus === "present" ? nowIso : s.serverReceiptAt,
+          clientCaptureAt: payload.personalStatus === "present" ? (finalCapturedAt || s.clientCaptureAt) : s.clientCaptureAt,
+          photoDataUrl: payload.photoDataUrl || s.photoDataUrl,
+          evidenceAvailable: Boolean(payload.photoDataUrl || s.photoDataUrl || s.evidenceAvailable),
+          note: cleanNote !== undefined ? cleanNote : s.note,
+          erpStatus: payload.erpStatus !== undefined && payload.erpStatus !== null ? payload.erpStatus : s.erpStatus,
+          erpRecordedAt: payload.erpStatus && !s.erpStatus ? nowIso : s.erpRecordedAt,
+        };
+      });
+      void setCachedStore("sessions", updated).catch(() => {});
+      return updated;
+    });
+
+    // 2. Persist complete record atomically to Cloud Firestore
+    try {
+      const result = await saveCompleteAttendanceRecord(user.uid, sessionId, payload);
+
+      persistLocalSessionOverride(sessionId, {
+        personalStatus: result.session.personalStatus,
+        erpStatus: result.session.erpStatus,
+        note: result.session.note,
+        evidenceAvailable: result.session.evidenceAvailable,
+        evidenceStoragePath: result.session.evidenceStoragePath,
+        finalized: result.session.finalized,
+        finalizedAt: result.session.finalizedAt,
+        serverReceiptAt: result.session.serverReceiptAt,
+        clientCaptureAt: result.session.clientCaptureAt,
+      });
+
+      // Update state with server confirmed session
+      setSessions((prev) => {
+        const confirmed = prev.map((s) => (s.id === sessionId ? { ...s, ...result.session } : s));
+        void setCachedStore("sessions", confirmed).catch(() => {});
+        return confirmed;
+      });
+    } catch (err) {
+      if (prevSession) {
+        setSessions((prev) => {
+          const reverted = prev.map((s) => (s.id === sessionId ? prevSession : s));
+          void setCachedStore("sessions", reverted).catch(() => {});
+          return reverted;
+        });
+      }
+      throw err;
+    }
+  };
+
   const handleRecordErp = async (sessionId: string, status: "Present" | "Absent") => {
     if (!user || !auth.currentUser || auth.currentUser.uid !== user.uid) {
       throw new Error("You must be logged in as an authenticated student to record ERP attendance.");
     }
     const prevSession = sessions.find((s) => s.id === sessionId);
 
-    // 1. Instant optimistic update so analytics recompute with 0ms delay:
-    const updated = sessions.map((s) => (s.id === sessionId ? { ...s, erpStatus: status } : s));
-    setSessions(updated);
-    void setCachedStore("sessions", updated).catch(() => {});
+    // 1. Instant optimistic update using functional updater
+    setSessions((prev) => {
+      const updated = prev.map((s) => (s.id === sessionId ? { ...s, erpStatus: status } : s));
+      void setCachedStore("sessions", updated).catch(() => {});
+      return updated;
+    });
 
     // 2. Persist to Firestore with rollback on error:
     try {
@@ -5077,9 +5144,11 @@ export default function App() {
       persistLocalSessionOverride(sessionId, { erpStatus: status });
     } catch (err) {
       if (prevSession) {
-        const reverted = sessions.map((s) => (s.id === sessionId ? prevSession : s));
-        setSessions(reverted);
-        void setCachedStore("sessions", reverted).catch(() => {});
+        setSessions((prev) => {
+          const reverted = prev.map((s) => (s.id === sessionId ? prevSession : s));
+          void setCachedStore("sessions", reverted).catch(() => {});
+          return reverted;
+        });
       }
       throw err;
     }
@@ -5093,24 +5162,26 @@ export default function App() {
     const nowIso = new Date().toISOString();
     const finalCapturedAt = capturedAt || (photoUrl ? nowIso : undefined);
 
-    // 1. Instant optimistic update:
-    const updated = sessions.map((s) =>
-      s.id === sessionId
-        ? {
-            ...s,
-            personalStatus: "present" as const,
-            finalized: true,
-            finalizedAt: nowIso,
-            serverReceiptAt: nowIso,
-            clientCaptureAt: finalCapturedAt || s.clientCaptureAt,
-            photoDataUrl: photoUrl || s.photoDataUrl,
-            evidenceAvailable: Boolean(photoUrl || s.photoDataUrl || s.evidenceAvailable),
-            note: note !== undefined ? note : s.note,
-          }
-        : s
-    );
-    setSessions(updated);
-    void setCachedStore("sessions", updated).catch(() => {});
+    // 1. Instant optimistic update using functional updater
+    setSessions((prev) => {
+      const updated = prev.map((s) =>
+        s.id === sessionId
+          ? {
+              ...s,
+              personalStatus: "present" as const,
+              finalized: true,
+              finalizedAt: nowIso,
+              serverReceiptAt: nowIso,
+              clientCaptureAt: finalCapturedAt || s.clientCaptureAt,
+              photoDataUrl: photoUrl || s.photoDataUrl,
+              evidenceAvailable: Boolean(photoUrl || s.photoDataUrl || s.evidenceAvailable),
+              note: note !== undefined ? note : s.note,
+            }
+          : s
+      );
+      void setCachedStore("sessions", updated).catch(() => {});
+      return updated;
+    });
 
     // 2. Persist to Firestore with rollback on error:
     try {
@@ -5126,9 +5197,11 @@ export default function App() {
       });
     } catch (err) {
       if (prevSession) {
-        const reverted = sessions.map((s) => (s.id === sessionId ? prevSession : s));
-        setSessions(reverted);
-        void setCachedStore("sessions", reverted).catch(() => {});
+        setSessions((prev) => {
+          const reverted = prev.map((s) => (s.id === sessionId ? prevSession : s));
+          void setCachedStore("sessions", reverted).catch(() => {});
+          return reverted;
+        });
       }
       throw err;
     }
@@ -5141,20 +5214,22 @@ export default function App() {
     const prevSession = sessions.find((s) => s.id === sessionId);
     const nowIso = new Date().toISOString();
 
-    const updated = sessions.map((s) =>
-      s.id === sessionId
-        ? {
-            ...s,
-            personalStatus: "absent" as const,
-            absentType: "manual_student" as const,
-            finalized: true,
-            finalizedAt: nowIso,
-            note: note !== undefined ? note : s.note,
-          }
-        : s
-    );
-    setSessions(updated);
-    void setCachedStore("sessions", updated).catch(() => {});
+    setSessions((prev) => {
+      const updated = prev.map((s) =>
+        s.id === sessionId
+          ? {
+              ...s,
+              personalStatus: "absent" as const,
+              absentType: "manual_student" as const,
+              finalized: true,
+              finalizedAt: nowIso,
+              note: note !== undefined ? note : s.note,
+            }
+          : s
+      );
+      void setCachedStore("sessions", updated).catch(() => {});
+      return updated;
+    });
 
     try {
       await markSessionAbsent(user.uid, sessionId, note);
@@ -5167,9 +5242,11 @@ export default function App() {
       });
     } catch (err) {
       if (prevSession) {
-        const reverted = sessions.map((s) => (s.id === sessionId ? prevSession : s));
-        setSessions(reverted);
-        void setCachedStore("sessions", reverted).catch(() => {});
+        setSessions((prev) => {
+          const reverted = prev.map((s) => (s.id === sessionId ? prevSession : s));
+          void setCachedStore("sessions", reverted).catch(() => {});
+          return reverted;
+        });
       }
       throw err;
     }
@@ -5177,48 +5254,50 @@ export default function App() {
 
   const handleFreezeClassQuick = async (sessionId: string) => {
     const nowIso = new Date().toISOString();
-    // 1. Instant optimistic update across all sessions in real-time
-    const updated = sessions.map((s) =>
-      s.id === sessionId
-        ? {
-            ...s,
-            personalStatus: "frozen" as const,
-            finalized: true,
-            frozenAt: nowIso,
-            finalizedAt: nowIso,
-            previousPersonalStatus: s.personalStatus !== "frozen" ? s.personalStatus : "absent",
-            previousErpStatus: s.erpStatus ?? null,
-          }
-        : s
-    );
-    setSessions(updated);
-    void setCachedStore("sessions", updated).catch(() => {});
+    setSessions((prev) => {
+      const updated = prev.map((s) =>
+        s.id === sessionId
+          ? {
+              ...s,
+              personalStatus: "frozen" as const,
+              finalized: true,
+              frozenAt: nowIso,
+              finalizedAt: nowIso,
+              previousPersonalStatus: s.personalStatus !== "frozen" ? s.personalStatus : "absent",
+              previousErpStatus: s.erpStatus ?? null,
+            }
+          : s
+      );
+      void setCachedStore("sessions", updated).catch(() => {});
+      return updated;
+    });
     persistLocalSessionOverride(sessionId, {
       personalStatus: "frozen",
       finalized: true,
       frozenAt: nowIso,
       finalizedAt: nowIso,
     });
-    // 2. Persist to Firestore / IndexedDB cache
     if (user) {
       await freezeClassSession(user.uid, sessionId);
     }
   };
 
   const handleUnfreezeClassQuick = async (sessionId: string) => {
-    const updated = sessions.map((s) => {
-      if (s.id !== sessionId) return s;
-      const restoredStatus =
-        (s as any).previousPersonalStatus === "present" ? "present" : "absent";
-      return {
-        ...s,
-        personalStatus: restoredStatus as const,
-        frozenAt: null,
-        finalized: true,
-      };
+    setSessions((prev) => {
+      const updated = prev.map((s) => {
+        if (s.id !== sessionId) return s;
+        const restoredStatus =
+          (s as any).previousPersonalStatus === "present" ? "present" : "absent";
+        return {
+          ...s,
+          personalStatus: restoredStatus as const,
+          frozenAt: null,
+          finalized: true,
+        };
+      });
+      void setCachedStore("sessions", updated).catch(() => {});
+      return updated;
     });
-    setSessions(updated);
-    void setCachedStore("sessions", updated).catch(() => {});
     persistLocalSessionOverride(sessionId, {
       personalStatus: "absent",
       frozenAt: null,
@@ -5268,6 +5347,7 @@ export default function App() {
                     onMarkPresent={handleMarkPresentQuick}
                     onMarkAbsent={handleMarkAbsentQuick}
                     onFreezeClass={handleFreezeClassQuick}
+                    onSaveCompleteAttendance={handleSaveCompleteAttendance}
                   />
                 )}
               />
@@ -5284,6 +5364,7 @@ export default function App() {
                     onMarkPresent={handleMarkPresentQuick}
                     onMarkAbsent={handleMarkAbsentQuick}
                     onFreezeClass={handleFreezeClassQuick}
+                    onSaveCompleteAttendance={handleSaveCompleteAttendance}
                   />
                 )}
               />
@@ -5318,6 +5399,7 @@ export default function App() {
                     onMarkPresent={handleMarkPresentQuick}
                     onMarkAbsent={handleMarkAbsentQuick}
                     onFreezeClass={handleFreezeClassQuick}
+                    onSaveCompleteAttendance={handleSaveCompleteAttendance}
                   />
                 )}
               />

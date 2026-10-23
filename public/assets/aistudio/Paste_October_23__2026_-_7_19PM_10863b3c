@@ -1,0 +1,738 @@
+# ATTENDWISE — MASTER ENGINEERING REPAIR PROMPT
+## Permanent Cloud Persistence, Stable Authentication, Real-Time Synchronization, Evidence Integrity, and Attendance State Recovery
+
+You are acting as the **principal full-stack engineer, Firebase architect, database reliability engineer, and QA engineer** responsible for repairing my existing AttendWise application.
+
+This is a critical production-style repair task. I have already spent approximately two days debugging attendance persistence and real-time synchronization. Several previous attempts have not solved the underlying problem. I do not want another generic diagnosis, a cosmetic UI change, or a proposed solution that is never implemented.
+
+**Your responsibility is to inspect the existing application, identify the actual root causes, implement the smallest complete and safe repair, and verify the result to the extent your environment permits.**
+
+Do not stop after producing an audit report or a plan. Continue through implementation, regression checks, and a final evidence-based report. If a necessary operation is genuinely blocked by missing Firebase configuration, permissions, or access to the deployed environment, complete everything safely possible and identify the exact blocker. Never pretend that an unexecuted test passed.
+
+---
+
+# PART 1 — UNDERSTAND THE EXISTING APPLICATION
+
+AttendWise is an existing React-based student attendance application with Firebase integration. The project history includes TypeScript/TSX, Vite, Firebase Authentication, Cloud Firestore, and potentially Firebase Storage. Verify the actual current implementation before changing anything.
+
+The application has already been built and contains working features that must be preserved.
+
+AttendWise is intended to maintain an independent student attendance record and compare it with the student's college ERP attendance record. It is not a replacement for the college ERP, and teachers are not users who mark attendance in this application.
+
+Existing functionality includes:
+
+- Student authentication and individual dashboards.
+- A Monday-to-Saturday timetable.
+- Subjects, teachers, and T/P class types.
+- Academic calendar and non-working days.
+- Scheduled class windows.
+- AttendWise Present/Absent status.
+- Photo evidence and keynote/reason text.
+- Separate ERP Present/Absent/Not Entered status.
+- Attendance analytics and percentages.
+- Attendance history and timeline.
+- Class freezing/cancellation with a required reason.
+- A fixed historical Python Training block.
+- Firebase-backed persistence and intended real-time synchronization.
+
+Do not rebuild the application from scratch. Do not replace working features with simplified versions. Repair the existing system and retain the current UI, project structure, authentication intent, database schema, and deployed application behavior wherever they are correct.
+
+# PART 2 — THE EXACT FAILURE THAT MUST BE FIXED
+
+Reproduce and address this complete scenario.
+
+### Laptop A — initial attendance submission
+
+1. A student opens AttendWise and signs in.
+2. The student opens a class card whose class is currently in progress.
+3. The student marks AttendWise attendance as Present.
+4. The student captures the required photo evidence.
+5. The student enters the required keynote/reason text.
+6. The student selects and saves the ERP attendance status.
+7. The application initially displays Present, the photo, the keynote, and the ERP status on the class card and dashboard.
+
+At this point, the interface appears correct.
+
+### Laptop A — revisiting the application
+
+8. The student closes the website or signs out.
+9. The student revisits the website and signs back into the same student account.
+10. The class card incorrectly displays only “In Progress,” as though no attendance was saved.
+11. The previously visible Present status, photo evidence, keynote, and ERP status may be missing.
+
+### Laptop B — same account
+
+12. The student opens AttendWise on a different device and signs into the same account.
+13. The same session should display the same cloud-confirmed attendance record and associated evidence.
+14. It must not display a default state simply because the second device has different browser storage or an empty local cache.
+
+### Delayed or conflicting updates
+
+15. A previously saved Present may later appear as Absent.
+16. A stale listener, local default, automatic-absence process, or delayed write must not silently overwrite a valid confirmed Present.
+17. A success message must not appear when the required cloud write has actually failed.
+
+**These are the defects to solve. A temporary UI update is not a solution. A successful build is not proof of persistence. A Firestore listener alone is not proof of correct synchronization.**
+
+# PART 3 — PRIMARY ARCHITECTURAL REQUIREMENT
+
+Implement the following data-authority model using the existing Firebase architecture.
+
+## 3.1 Cloud Firestore is the authoritative source
+
+Every finalized attendance record must be stored in the correct existing Cloud Firestore document.
+
+The authoritative record must contain, or reliably reference, all information required to reconstruct the class card after reopening the website:
+
+- Student identity.
+- Scheduled session/class identity.
+- AttendWise attendance status.
+- ERP attendance status.
+- Keynote/reason text.
+- Photo evidence reference or stored evidence, according to the existing architecture.
+- Relevant timestamps.
+- Finalization state and any other existing fields needed by application rules.
+- Existing metadata required for history, analytics, and synchronization.
+
+Do not create a second competing database or a separate cache that acts as the source of truth.
+
+Before making changes, discover the actual existing collection names, document IDs, field names, and nested structure. Reuse the existing schema wherever possible. Do not invent new paths and leave old code reading from the previous paths.
+
+If the existing schema contains a confirmed defect that prevents correct persistence, make the smallest compatible correction and provide a safe migration strategy only if a migration is genuinely necessary.
+
+## 3.2 Local browser state must never be the only copy
+
+Inspect React state, context, hooks, localStorage, sessionStorage, IndexedDB, and Firestore's offline persistence configuration.
+
+These mechanisms may be useful for UI state or offline functionality, but they must not be mistaken for successful cloud persistence.
+
+Specifically:
+
+- React state may render the current attendance card.
+- Local storage may support non-authoritative preferences or recovery of an unsaved draft where appropriate.
+- IndexedDB or Firestore's persistent cache may be used if compatible with the current Firebase setup.
+- None of these mechanisms may silently substitute a locally cached status for a required, cloud-confirmed record.
+- Browser storage must not determine a new student identity on every visit.
+- Clearing or losing browser storage must not erase the authoritative attendance record.
+- Do not remove all caching indiscriminately. First determine which cache is used and whether it causes the actual defect.
+
+The system must recover its records from Firebase even when the browser has no previous local attendance state.
+
+# PART 4 — AUTHENTICATION AND STUDENT IDENTITY REPAIR
+
+Treat identity resolution as a first-class part of this repair.
+
+An attendance record can exist in Firestore and still appear missing if the application reads the record under the wrong UID or a different document path.
+
+## 4.1 Audit the existing authentication flow
+
+Inspect the complete authentication lifecycle, including:
+
+- Firebase initialization.
+- Authentication persistence configuration.
+- Auth-state observers such as `onAuthStateChanged`.
+- Sign-in and sign-out handlers.
+- Student account creation.
+- Anonymous authentication and anonymous-to-permanent-account linking, if present.
+- Any automatic fallback authentication.
+- Session-storage-dependent logout behavior.
+- Auth context and user hydration.
+- Every attendance read/write that obtains a UID.
+- Any code that changes the student UID or document ownership.
+- The login process after a page refresh or a new browser visit.
+
+A previous AI Studio diagnosis reported a possible `signInAnonymously()` call in `auth-service.ts` and possible logout behavior in `App.tsx` when sessionStorage was empty. Verify the current source. These earlier findings may be outdated.
+
+## 4.2 Enforce stable account identity
+
+Use the application's intended, existing student authentication method.
+
+The same real student account must resolve to the same Firebase UID across visits and devices.
+
+Requirements:
+
+1. Wait until Firebase has resolved the authenticated user's identity before loading that student's attendance records.
+2. Do not start an attendance query using a temporary, missing, stale, or newly generated UID.
+3. Do not automatically sign the student out merely because a browser storage key is missing.
+4. Do not call `signInAnonymously()` during an attendance save as a fallback for a missing user.
+5. Do not create a new account every time the student revisits the website.
+6. Do not change student UIDs, account ownership, or record ownership without a verified need and a safe plan.
+7. Preserve the current login and account-creation experience wherever possible.
+8. Ensure listeners and data queries are reinitialized when the authenticated user genuinely changes.
+9. Ensure the previous student's data is cleared from the active UI when the account changes, without deleting cloud records.
+10. Ensure the new student's data is not shown until the new identity and corresponding cloud data have been resolved.
+
+**Important authentication limitation:** If the existing application relies exclusively on anonymous accounts, those accounts do not automatically identify the same student across different devices. In that situation, inspect whether the app already supports email/password or another permanent account provider. Use the existing intended account system or a safe account-linking approach where possible. Do not silently migrate identities or change authentication providers without evidence and a safe compatibility strategy.
+
+If a provider configuration is missing, identify the precise issue and implement all safe code changes possible. Do not fabricate a successful login.
+
+# PART 5 — REPAIR THE COMPLETE ATTENDANCE SAVE TRANSACTION
+
+Inspect every attendance-writing handler and service, including any existing functions similar to:
+
+- `handleMarkPresentQuick`
+- `handleSaveAllStatus`
+- `markSessionPresent`
+- `finalizeExpiredSessionsForStudent`
+- Firestore transaction helpers
+- Photo evidence handlers
+- ERP status save handlers
+- Attendance merge/hydration helpers
+
+These names are leads from earlier diagnostics, not guaranteed names in the current code. Locate the actual current functions.
+
+## 5.1 Make saving reliable
+
+When a student saves attendance:
+
+1. Validate the authenticated student identity.
+2. Validate the session ID and class eligibility according to existing rules.
+3. Validate required fields without discarding the user's entered data.
+4. Save the photo using the existing supported storage mechanism.
+5. Wait for required photo upload completion if Firebase Storage is used.
+6. Persist the attendance status, keynote, ERP status, evidence reference, and associated metadata using a consistent and safe write strategy.
+7. Await the required Firestore operation.
+8. Handle and report errors.
+9. Where appropriate, read back the committed record from the server to verify that the expected data is present.
+10. Only then display a definitive cloud-save success state.
+
+If the current product deliberately saves ERP status separately from attendance, preserve that behavior while ensuring each operation has its own clear save state and cannot overwrite unrelated fields.
+
+If an atomic operation is required to prevent partial state, use a transaction or another appropriate Firebase-supported strategy. Remember that Firestore transactions have restrictions on external side effects; do not upload a photo inside a transaction callback. Use a safe upload-and-commit workflow with cleanup or retry handling for incomplete uploads.
+
+## 5.2 Avoid misleading optimistic success
+
+The interface may optimistically display a pending state, but it must distinguish that from a cloud-confirmed status.
+
+Use appropriate state labels such as:
+
+- Loading record.
+- Saving attendance.
+- Saving evidence.
+- Saved to cloud.
+- Save failed — retry required.
+- Offline or cloud confirmation unavailable.
+
+Do not display a permanent success message merely because `setState` succeeded.
+
+If the cloud write fails, preserve the user's unsaved photo, keynote, and selected ERP value for a safe retry when possible. Do not represent unsaved data as permanently stored.
+
+Avoid duplicate writes caused by repeated clicks, double submissions, or retries. Make save operations idempotent where appropriate.
+
+# PART 6 — PHOTO EVIDENCE AND KEYNOTE PERSISTENCE
+
+Photo evidence and keynote text must survive page reloads, logout/login, and another-device access.
+
+## 6.1 Inspect the current evidence architecture
+
+Determine whether photos are stored in:
+
+- Firebase Storage.
+- Firestore directly.
+- A combination of Firebase Storage and Firestore.
+- Browser-only storage, such as a data URL, Blob, or object URL.
+- Another existing mechanism.
+
+Do not assume the current implementation.
+
+## 6.2 If Firebase Storage is used
+
+Ensure that:
+
+1. The photo upload completes successfully.
+2. The application obtains a stable reference to the stored object.
+3. The correct attendance record stores that reference.
+4. The associated Firestore write succeeds.
+5. The photo can be retrieved after a fresh login.
+6. The same evidence is available to the same student on another device.
+7. Security rules permit authorized access without exposing another student's evidence.
+8. A failed Firestore write does not silently leave the UI claiming the photo was saved with the attendance record.
+9. Retries do not generate uncontrolled duplicate objects.
+10. Failed or abandoned uploads can be handled safely without deleting valid existing evidence.
+
+Do not rely on an object URL created in browser memory as the permanent photo reference.
+
+Do not make a public bucket or publicly accessible photo URL the default workaround.
+
+## 6.3 If photos are stored directly in Firestore
+
+Verify that the representation is compatible with Firestore limits and the existing schema. Do not assume that storing a large Base64 string in a document is appropriate.
+
+If a migration to Firebase Storage is demonstrably necessary, do not silently break existing evidence references. Preserve existing records and implement a backward-compatible read strategy.
+
+## 6.4 Keynote and metadata
+
+Persist keynote text and relevant timestamps with the correct session record.
+
+Do not store the keynote only in a component state, a transient form, or a browser-only backup.
+
+Ensure that updating the keynote does not reset attendance status, photo references, ERP status, or unrelated session metadata.
+
+# PART 7 — AUTHORITATIVE DATA HYDRATION AFTER REOPENING
+
+Repair the entire path from Firebase authentication to the visible class card.
+
+## 7.1 Correct loading sequence
+
+Implement a reliable sequence consistent with the existing application:
+
+1. Initialize Firebase.
+2. Resolve the authentication state.
+3. Resolve the correct student UID.
+4. Initialize the relevant Firestore subscriptions or queries.
+5. Retrieve the authoritative session records.
+6. Reconcile records with scheduled class metadata.
+7. Render the attendance card using the saved record.
+8. Continue receiving real-time cloud updates.
+
+The UI must not prematurely interpret a missing record as proof that the student never marked attendance.
+
+Use distinct states for:
+
+- Authentication unresolved.
+- Cloud records loading.
+- Cloud record confirmed.
+- No record exists after a valid query.
+- Read failed.
+- Cached data shown but server confirmation pending, where applicable.
+
+Do not render an empty default record while the app is still resolving the correct UID or waiting for the initial query.
+
+## 7.2 Correct session identity
+
+Audit how session IDs are generated and reused.
+
+A session must be identifiable consistently across:
+
+- The initial attendance write.
+- The card's later read.
+- The dashboard.
+- Attendance history.
+- Analytics.
+- Real-time listeners.
+- Automatic finalization.
+- Another device.
+
+Do not use inconsistent date formatting, transient array indexes, random IDs generated during rendering, or a different ID algorithm between saving and retrieving.
+
+Preserve the current schema and stable IDs wherever correct. Do not change document IDs without a compatibility plan.
+
+## 7.3 Do not derive a saved status from class timing
+
+Class timing and attendance status are separate concepts.
+
+If a class is in progress and the student has a cloud-confirmed Present record, the card must show both:
+
+- Class state: In Progress.
+- AttendWise status: Present.
+
+If a saved record exists, it must take precedence over the default “not yet marked” UI.
+
+If no record exists, show the correct unmarked or pending state according to existing business rules. Do not assume that a query returned no record simply because the listener has not loaded.
+
+# PART 8 — REAL-TIME FIRESTORE SYNCHRONIZATION
+
+Use the existing Firebase real-time mechanism if it is appropriate. Firestore `onSnapshot` should remain the preferred mechanism for ordinary live synchronization in this application.
+
+Do not introduce a separate WebSocket server merely to work around a faulty Firestore data flow.
+
+## 8.1 Listener correctness
+
+Inspect every relevant listener.
+
+Ensure that:
+
+- It subscribes to the correct student and session records.
+- It is created only after the authenticated identity is resolved.
+- It is removed when the component, subscription, or authenticated account changes.
+- It is recreated for the correct user when needed.
+- Listener errors are surfaced and logged safely.
+- The UI does not interpret a listener error as an empty attendance record.
+- Cached snapshots and server-confirmed snapshots are handled correctly.
+- The UI does not retain the previous student's records after an account switch.
+- Multiple listeners do not compete to write contradictory values.
+- Unnecessary listeners do not multiply on every render or login.
+
+Use server-confirmed data appropriately where needed. If Firestore metadata indicates that a snapshot comes from cache, do not claim that the server has just confirmed that data.
+
+Do not disable all offline functionality indiscriminately. The key requirement is that the app must distinguish cached or pending data from cloud-confirmed data.
+
+## 8.2 Cross-device requirement
+
+After a record is committed to Firestore, any other device authenticated as the same student must be able to retrieve that record.
+
+The UI on another device should update when its listener receives the relevant change, without requiring localStorage from the first device.
+
+If the deployed app cannot be accessed for a live cross-device test, implement and review the code, then explicitly identify that runtime verification remains blocked.
+
+# PART 9 — PREVENT ATTENDANCE OVERWRITES AND AUTOMATIC-ABSENCE CORRUPTION
+
+This requirement is critical.
+
+Audit every code path that can create, update, merge, finalize, or replace an attendance record.
+
+Look specifically for:
+
+- `finalizeExpiredSessionsForStudent`, if present.
+- Automatic-absence logic.
+- Scheduled jobs or background tasks.
+- Merge logic that combines timetable entries with stored attendance.
+- Snapshot handlers.
+- Effects that reset status when the class state changes.
+- Default values assigned during hydration.
+- Updates that replace entire documents when they should update selected fields.
+- Code that resets status or evidence after a save.
+- Duplicate submissions and race conditions.
+- Updates triggered by the class timing changing from in progress to expired.
+
+## Required protection
+
+A valid, cloud-confirmed Present must not silently become Absent because:
+
+- The browser was reopened.
+- A listener returned an older snapshot.
+- The authenticated user was not yet resolved.
+- The app temporarily failed to retrieve the record.
+- A cache was empty.
+- A save was still in flight.
+- A duplicate finalization task ran.
+- The timetable was merged with an unmarked default record.
+
+Automatic absence must apply only when all existing business rules permit it and the authoritative record genuinely has no valid Present status.
+
+Use safe transactions or conditional updates where appropriate. Avoid blind whole-document overwrites that discard evidence or ERP fields.
+
+Where concurrency is possible, ensure the update checks the latest authoritative record before changing the status.
+
+Make finalization idempotent: repeating a valid finalization operation must not corrupt a record already finalized according to the application's rules.
+
+If the system already has a legitimate correction workflow, preserve it. Do not introduce arbitrary permanent locks that prevent all legitimate updates.
+
+# PART 10 — ERP STATUS MUST BE PERSISTED INDEPENDENTLY
+
+The ERP status is a separate field or record governed by the existing architecture.
+
+Valid values are:
+
+- Present.
+- Absent.
+- Not Entered.
+
+Requirements:
+
+1. Save the ERP status to the authoritative cloud record.
+2. Retrieve it after reopening and signing in.
+3. Synchronize it across devices for the same account.
+4. Preserve the distinction between Not Entered and Absent.
+5. Do not overwrite AttendWise status while updating ERP status.
+6. Do not clear ERP status when saving photo evidence or keynote.
+7. Preserve existing ERP submission and locking rules.
+8. Ensure a delayed listener cannot restore an old ERP status over a newer committed status.
+9. Show an appropriate save state and error if the ERP write fails.
+10. Ensure analytics and history use the saved ERP status and the existing denominator rules.
+
+If the current application intentionally saves ERP status separately, preserve the schema and repair the relevant independent write/read path rather than combining everything into an unnecessary new schema.
+
+# PART 11 — PROTECT EXISTING BUSINESS RULES
+
+The following features must continue working after the repair.
+
+## Timetable and class timing
+
+- Monday through Saturday.
+- Existing subjects, teachers, and T/P labels.
+- Existing valid attendance windows.
+- IST/Asia/Kolkata time calculations.
+- Non-working calendar days must not generate regular eligible classes.
+- “In Progress” must not replace a saved attendance status.
+
+## Freeze/cancellation
+
+- Preserve the existing class-freezing functionality.
+- Preserve the required reason/keynote for freezing.
+- Exclude frozen/cancelled sessions from the applicable attendance calculations.
+- Preserve history and audit context according to the current design.
+- Ensure future session freezes update totals correctly.
+- Do not erase attendance records simply because a session is frozen.
+
+## Python Training
+
+Preserve the historical Python Training block:
+
+- Subject: Python training.
+- Period: 7 September through 21 September.
+- Six periods per eligible training day.
+- Expected historical total: 66 eligible classes.
+- No recurring training sessions after 21 September.
+- Preserve the existing inclusion of this block in relevant totals, history, and analytics.
+- Preserve the main semester attendance calculation's existing start date of 21 September.
+
+Do not recreate, duplicate, reset, or delete these records.
+
+## Analytics, history, and dashboard
+
+After persistence is repaired:
+
+- Dashboard values must reflect authoritative saved attendance.
+- History must retrieve the same attendance records.
+- Analytics must use the existing eligible-session and frozen-session rules.
+- ERP percentages must remain separate from AttendWise percentages.
+- Not Entered must not be treated as Absent.
+- All pages must agree about the status of the same session.
+- A record must not appear Present on one page and unmarked on another due to different local state sources.
+
+# PART 12 — FIRESTORE SCHEMA, SECURITY, AND DATA SAFETY
+
+Inspect the existing Firestore schema and security rules before changing them.
+
+Do not weaken security rules to make a failing write appear successful.
+
+Verify that authenticated users can access only the records permitted by the application's intended access model. A student must not be able to overwrite another student's attendance simply by changing a document ID or client-side UID.
+
+If security rules need a change, explain the exact denied operation and implement the narrowest safe rule consistent with the existing data model, where the available project tools permit it.
+
+Do not:
+
+- Delete all Firestore documents.
+- Clear attendance collections.
+- Recreate student records.
+- Generate dummy attendance to hide missing data.
+- Change Firebase projects without authorization.
+- Reset authentication accounts.
+- Migrate all student UIDs speculatively.
+- Replace existing collections with a new schema.
+- Expose private credentials, service-account keys, tokens, or photo URLs in logs.
+- Make evidence publicly readable as a workaround.
+- Claim absolute immutability just because the client no longer overwrites a record.
+
+Protect the existing data and take advantage of version control or a safe source checkpoint before editing.
+
+If a schema migration is truly unavoidable, first design a backward-compatible transition that preserves existing records and explain the migration requirements. Do not perform a destructive migration automatically.
+
+# PART 13 — IMPLEMENTATION METHOD
+
+Execute the repair in the current project.
+
+### Step 1: Inspect
+
+Read the current source files, Firebase initialization, auth service, save handlers, data service, listener setup, status rendering, finalization logic, and relevant configuration.
+
+Search for all reads and writes of the attendance, evidence, keynote, ERP, UID, and session fields.
+
+Identify the actual current Firestore paths. Do not rely solely on earlier AI-generated diagnoses.
+
+### Step 2: Establish root causes
+
+Create a concise internal dependency map:
+
+Authentication → student UID → session ID → Firestore write → Firestore read/listener → UI hydration → automatic finalization.
+
+Also map the evidence flow:
+
+Camera capture → photo upload/storage → evidence reference → Firestore record → photo retrieval → UI rendering.
+
+Trace the ERP flow separately if it is saved independently.
+
+Determine which operations are currently failing, using the source, error handling, logs, and any accessible runtime.
+
+### Step 3: Implement targeted repairs
+
+Make the necessary source changes directly.
+
+Prioritize:
+1. Stable authenticated identity.
+2. Correct Firestore document addressing.
+3. Cloud-confirmed save behavior.
+4. Reliable reload and data hydration.
+5. Evidence persistence and retrieval.
+6. Real-time listener correctness.
+7. Automatic-absence and concurrency protection.
+8. Independent ERP persistence.
+9. Error handling and regression safety.
+
+Do not stop after writing a diagnosis or listing suggested fixes.
+
+### Step 4: Inspect the changes
+
+Review the actual changed files and ensure that:
+
+- Existing schema compatibility is preserved.
+- No working features have been replaced with mock implementations.
+- No attendance records are cleared or recreated.
+- Every relevant read and write uses the intended identity and session ID.
+- No listener or effect continually overwrites saved state.
+- Save success is based on the required cloud operation.
+- Errors are visible and recoverable.
+- The application still builds and the existing business rules remain intact.
+
+### Step 5: Run available tests
+
+Run the project's existing build, type-check, and test commands if available. Add focused tests where feasible, using the existing test setup.
+
+Test the actual persistence behavior where the environment permits. Do not report a live Firebase test as passed if only a local mock or source inspection was used.
+
+# PART 14 — REQUIRED END-TO-END TEST SCENARIOS
+
+Use the current application and available testing tools. Record each scenario as PASS, FAIL, CODE REVIEW ONLY, or BLOCKED.
+
+## Scenario A: Cloud persistence
+
+1. Sign into the intended student account.
+2. Mark an eligible class Present.
+3. Save the photo evidence, keynote, and ERP status.
+4. Wait for all required cloud operations to complete.
+5. Confirm the committed record can be retrieved from its authoritative cloud location.
+6. Refresh the page.
+7. Confirm the same status and fields are displayed.
+
+## Scenario B: Sign-out and sign-in
+
+1. Save a valid record.
+2. Sign out normally.
+3. Sign back into the same student account.
+4. Confirm that the Firebase UID is the same as before.
+5. Confirm that the correct session document is read.
+6. Verify Present, photo evidence, keynote, and ERP status.
+
+## Scenario C: New browser visit
+
+1. Save a record.
+2. Close or reload the website.
+3. Reopen the website.
+4. Resolve authentication.
+5. Load the saved cloud record.
+6. Confirm that local browser state is not required to reconstruct the record.
+
+## Scenario D: Second device
+
+1. Save attendance on Laptop A.
+2. Open AttendWise on Laptop B.
+3. Sign in using the same actual student account.
+4. Confirm that both devices resolve the same student identity.
+5. Confirm that the same session record and evidence are retrieved.
+6. Where live listeners are active, verify that subsequent cloud-confirmed changes appear on both devices.
+
+## Scenario E: Evidence
+
+1. Save photo evidence and keynote.
+2. Reload the page.
+3. Verify that the photo is retrieved from its authoritative storage location.
+4. Verify that the keynote is restored from the cloud record.
+5. Repeat after signing into the same account on another device.
+
+## Scenario F: Failed write
+
+1. Use an available test environment or controlled failure simulation.
+2. Cause or simulate a failed save without damaging real records.
+3. Verify that the UI does not claim cloud-confirmed success.
+4. Verify that unsaved input remains available for retry where appropriate.
+5. Verify that retries do not create conflicting records or duplicate evidence unnecessarily.
+
+## Scenario G: Automatic absence
+
+1. Inspect a valid confirmed Present record.
+2. Run the relevant finalization logic in a safe test environment.
+3. Verify that the finalized Present remains Present.
+4. Verify that stale snapshots and repeated finalization cannot overwrite it.
+5. Verify that genuinely unmarked, eligible, expired sessions still follow the existing automatic-absence rules.
+
+## Scenario H: ERP independence
+
+1. Save AttendWise Present.
+2. Save ERP Absent, or another valid ERP state.
+3. Reload and verify both values remain distinct.
+4. Verify that updating one field does not reset the other.
+5. Verify that Not Entered is not interpreted as Absent.
+
+## Scenario I: Regression
+
+Verify that the timetable, calendar, class windows, IST calculations, freeze/cancellation, history, analytics, and Python Training block continue to work.
+
+Do not alter real attendance records just to perform tests. Prefer automated tests, a controlled test environment, or a dedicated test account if one is already available.
+
+# PART 15 — OBSERVABILITY AND DIAGNOSTICS
+
+Add or improve safe diagnostic logging where it helps establish the data flow.
+
+Useful events include:
+
+- Authentication state resolved.
+- Student UID resolved, using a non-sensitive diagnostic identifier where possible.
+- Session ID resolved.
+- Cloud save started.
+- Photo upload completed or failed.
+- Firestore write committed or failed.
+- Server-backed record read completed.
+- Listener attached or detached.
+- Finalization attempted, with the reason and result.
+- Record rejected due to a conflicting or already-finalized state.
+
+Never log passwords, authentication tokens, private keys, or unnecessary personal information. Avoid logging complete photo contents or sensitive keynote text.
+
+Surface useful errors instead of silently converting failures into an empty class card.
+
+Do not introduce a logging framework or expensive monitoring system unless the existing project needs it. Prefer the smallest effective diagnostics.
+
+# PART 16 — REQUIRED FINAL REPORT
+
+When implementation and available verification are complete, provide a precise report with these sections.
+
+### A. Root causes
+
+List the actual defects discovered, the source files/functions involved, and the evidence supporting each finding.
+
+Separate confirmed causes from possible causes.
+
+### B. Changes implemented
+
+List every changed file and explain what was repaired.
+
+Identify changes to authentication, Firestore reads/writes, listeners, evidence handling, finalization, and UI hydration separately.
+
+### C. Data preservation
+
+State whether the existing Firestore schema was preserved and whether any data migration was performed. Explicitly report any migration or configuration still required.
+
+### D. Test results
+
+For every scenario in Part 14, report:
+
+- PASS — actually executed and observed.
+- FAIL — actually executed and failed.
+- CODE REVIEW ONLY — inspected but not runtime-tested.
+- BLOCKED — unavailable or impossible in the current environment.
+
+Provide the actual build/type-check/test results where available.
+
+### E. Remaining blockers
+
+Identify the precise Firebase Console configuration, security rule, deployment, authentication, or runtime access issue that prevents further verification, if any.
+
+Do not vaguely tell me to “check Firebase.” State the exact setting or operation involved and why it is blocking the fix.
+
+### F. Release verdict
+
+Choose one:
+
+- **READY FOR LIVE VALIDATION** — source repairs and available checks are complete, but live production behavior still requires validation.
+- **VERIFIED IN TEST ENVIRONMENT** — the required scenarios actually passed in an appropriate test environment.
+- **NOT READY — DEFECTS REMAIN** — one or more important defects remain.
+- **BLOCKED — REQUIRED FIREBASE ACCESS UNAVAILABLE** — the remaining issue requires access the current environment does not have.
+
+Do not claim full production verification unless it actually occurred.
+
+# FINAL DIRECTIVE
+
+Treat this as a complete engineering repair, not a prompt-writing exercise.
+
+Do not merely explain what I should do manually. Inspect and modify the existing code using the capabilities available in this AI Studio project.
+
+Do not introduce WebSockets, replace Firestore, remove all local caching, or redesign the app just because persistence is broken. First repair the actual data flow and identity model.
+
+Do not replace a missing cloud record with a hardcoded Present status. Do not claim that local state is permanent storage. Do not let an empty cache, unresolved identity, stale snapshot, or default class state erase a valid saved record.
+
+The final implementation must make the following statement true in actual behavior:
+
+**When a student marks attendance, saves the photo evidence and keynote, and records the ERP status, AttendWise reliably persists the data in the correct cloud records. Whenever that same student opens the application again or signs in on another device, the application retrieves and displays the authoritative saved values. Real-time updates reflect cloud-confirmed changes, and no stale state or automatic process silently replaces a valid finalized attendance record.**
+
+Start by inspecting the current project. Then diagnose, repair, test, and report the actual results. Preserve the existing application and its data throughout the process.
