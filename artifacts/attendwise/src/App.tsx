@@ -5017,9 +5017,9 @@ export default function App() {
       const key = `attendwise_student_sessions_${user.uid}`;
       const existing = localStorage.getItem(key);
       const parsed = existing ? JSON.parse(existing) : {};
-      // Never store full-resolution inline data: URLs in localStorage to prevent QuotaExceededError
+      // Preserve compressed thumbnail photoDataUrl (<100KB) in local storage for instant reloads
       const safePatch = { ...patch };
-      if (safePatch.photoDataUrl && safePatch.photoDataUrl.startsWith("data:")) {
+      if (safePatch.photoDataUrl && safePatch.photoDataUrl.length > 100000) {
         delete safePatch.photoDataUrl;
       }
       parsed[sessionId] = { ...(parsed[sessionId] || {}), ...safePatch };
@@ -5064,7 +5064,7 @@ export default function App() {
           finalized: isStatusFinalized,
           finalizedAt: newPersonalStatus === "present" || newPersonalStatus === "absent" ? (s.finalizedAt || nowIso) : s.finalizedAt,
           serverReceiptAt: newPersonalStatus === "present" ? (s.serverReceiptAt || nowIso) : s.serverReceiptAt,
-          clientCaptureAt: newPersonalStatus === "present" ? (finalCapturedAt || s.clientCaptureAt || nowIso) : s.clientCaptureAt,
+          clientCaptureAt: newPersonalStatus === "present" || payload.photoDataUrl ? (finalCapturedAt || s.clientCaptureAt || nowIso) : s.clientCaptureAt,
           photoDataUrl: payload.photoDataUrl !== undefined ? payload.photoDataUrl : s.photoDataUrl,
           evidenceAvailable: Boolean(payload.photoDataUrl || s.photoDataUrl || s.evidenceAvailable),
           note: cleanNote !== undefined ? cleanNote : s.note,
@@ -5085,6 +5085,7 @@ export default function App() {
         erpStatus: result.session.erpStatus,
         note: result.session.note,
         evidenceAvailable: result.session.evidenceAvailable,
+        photoDataUrl: result.session.photoDataUrl,
         evidenceStoragePath: result.session.evidenceStoragePath,
         finalized: result.session.finalized,
         finalizedAt: result.session.finalizedAt,

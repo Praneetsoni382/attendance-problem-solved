@@ -957,6 +957,42 @@ export {
   BTECH_3RD_TEACHING_DAYS,
 };
 
+// Utility to compress base64 images into lightweight thumbnails (<30KB) that fit safely inside Firestore & IndexedDB
+export function compressImageBase64(dataUrl: string, maxDimension = 320, quality = 0.5): Promise<string> {
+  return new Promise((resolve) => {
+    if (!dataUrl || !dataUrl.startsWith("data:image")) {
+      return resolve(dataUrl);
+    }
+    if (typeof window === "undefined" || typeof document === "undefined") {
+      return resolve(dataUrl);
+    }
+    const img = new Image();
+    img.onload = () => {
+      let width = img.width || maxDimension;
+      let height = img.height || maxDimension;
+      if (width > maxDimension || height > maxDimension) {
+        if (width > height) {
+          height = Math.round((height * maxDimension) / width);
+          width = maxDimension;
+        } else {
+          width = Math.round((width * maxDimension) / height);
+          height = maxDimension;
+        }
+      }
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.max(width, 1);
+      canvas.height = Math.max(height, 1);
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return resolve(dataUrl);
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      const compressed = canvas.toDataURL("image/jpeg", quality);
+      resolve(compressed);
+    };
+    img.onerror = () => resolve(dataUrl);
+    img.src = dataUrl;
+  });
+}
+
 // Atomic Complete Attendance & Evidence Saver (Unified Cloud Firestore Transaction)
 export interface CompleteAttendancePayload {
   personalStatus?: "present" | "absent" | null;
@@ -978,20 +1014,26 @@ export async function saveCompleteAttendanceRecord(
   const receiptAt = new Date().toISOString();
   const captureTimestamp = payload.clientCapturedAt || receiptAt;
 
-  // 1. Photo evidence processing:
-  // Store inline dataUrl directly in Firestore document (up to 500,000 chars, ~350KB),
-  // which guarantees permanent retention across reloads, logouts, and all devices without depending on Cloud Storage!
-  let storageDownloadUrl: string | null = null;
-  let storagePath: string | null = null;
-  const safeDataUrl =
-    payload.photoDataUrl && payload.photoDataUrl.startsWith("data:") && payload.photoDataUrl.length < 500000
-      ? payload.photoDataUrl
-      : null;
-
+  // 1. Photo evidence processing with guaranteed inline compression:
+  let compressedPhotoUrl: string | null = null;
   if (payload.photoDataUrl && payload.photoDataUrl.startsWith("data:")) {
     try {
-      storagePath = `users/${uid}/attendance/${sessionId}/${Date.now()}.jpg`;
-      const storageRef = ref(storage, storagePath);
+      compressedPhotoUrl = await compressImageBase64(payload.photoDataUrl, 320, 0.5);
+    } catch {
+      compressedPhotoUrl = payload.photoDataUrl.length < 300000 ? payload.photoDataUrl : null;
+    }
+  } else if (payload.photoDataUrl && payload.photoDataUrl.startsWith("http")) {
+    compressedPhotoUrl = payload.photoDataUrl;
+  }
+
+  let storageDownloadUrl: string | null = null;
+  let storagePath: string | null = null;
+
+  // Attempt Storage upload only if Storage is available; do NOT assign broken storagePath if it fails!
+  if (payload.photoDataUrl && payload.photoDataUrl.startsWith("data:")) {
+    try {
+      const tryPath = `users/${uid}/attendance/${sessionId}/${Date.now()}.jpg`;
+      const storageRef = ref(storage, tryPath);
       await uploadString(storageRef, payload.photoDataUrl, "data_url", {
         contentType: "image/jpeg",
         customMetadata: {
@@ -1001,6 +1043,7 @@ export async function saveCompleteAttendanceRecord(
         },
       });
       storageDownloadUrl = await getDownloadURL(storageRef);
+      storagePath = tryPath;
     } catch (storageErr) {
       console.warn("Storage upload notice (falling back to durable inline persistence):", storageErr);
     }
@@ -1038,7 +1081,7 @@ export async function saveCompleteAttendanceRecord(
     const isP7TestClass = session.slot === "P7" || session.subjectId === "sub-test-class-p7" || session.subjectCode === "TEST-P7";
 
     // ONLY validate window boundaries when student is actively marking AttendWise Present!
-    // Students can save ERP status or Keynotes at ANY time independently without being blocked!
+    // Students can save ERP status, Keynotes, or Camera Photos at ANY time independently without being blocked!
     if (!isHistoricalTraining && payload.personalStatus === "present" && session.personalStatus !== "present") {
       const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" }).format(new Date());
       if (!isP7TestClass && session.scheduledDate !== today) {
@@ -1115,11 +1158,11 @@ export async function saveCompleteAttendanceRecord(
       ? (session.serverReceiptAt || receiptAt)
       : (session.serverReceiptAt ?? null);
 
-    const finalClientCaptureAt = finalPersonalStatus === "present"
+    const finalClientCaptureAt = finalPersonalStatus === "present" || compressedPhotoUrl
       ? (captureTimestamp || session.clientCaptureAt || receiptAt)
       : (session.clientCaptureAt ?? null);
 
-    const finalPhotoUrl = safeDataUrl || storageDownloadUrl || session.photoDataUrl || null;
+    const finalPhotoUrl = compressedPhotoUrl || storageDownloadUrl || session.photoDataUrl || null;
     const finalStoragePath = storagePath || session.evidenceStoragePath || null;
     const hasPhoto = Boolean(finalPhotoUrl || finalStoragePath);
 
@@ -1198,7 +1241,7 @@ export async function saveCompleteAttendanceRecord(
       transaction.set(metaRef, {
         id: `meta-${sessionId}`,
         sessionId,
-        dataUrl: safeDataUrl,
+        dataUrl: finalPhotoUrl,
         storageUrl: storageDownloadUrl || null,
         storagePath: finalStoragePath,
         clientCapturedAt: captureTimestamp,
