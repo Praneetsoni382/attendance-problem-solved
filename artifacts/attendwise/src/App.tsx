@@ -4808,47 +4808,7 @@ export default function App() {
 
     setSubjects(defaultData.subjects);
     setTimetable(defaultData.timetable);
-    setSessions(initialSessions);
-    if (hasConfirmedLocalData) {
-      setSessionsInitialLoading(false);
-    }
-
-    // Fast IndexedDB cache check for instant rendering
-    dataManager
-      .getCachedDashboardData(user.uid)
-      .then((cached) => {
-        if (cached?.sessions && cached.sessions.length > 0) {
-          setSessions((current) => {
-            const cacheMap = new Map<string, ClassSessionItem>();
-            cached.sessions.forEach((cs) => {
-              cacheMap.set(cs.id, cs);
-              if (cs.scheduledDate && cs.slot) {
-                cacheMap.set(`${cs.scheduledDate}_${cs.slot}`, cs);
-              }
-            });
-            return current.map((s) => {
-              const cachedMatch = cacheMap.get(s.id) || cacheMap.get(`${s.scheduledDate}_${s.slot}`);
-              if (cachedMatch) {
-                // If the cached record has confirmed attendance (present, frozen, server receipt, ERP, or keynote),
-                // it takes precedence over default template values!
-                if (
-                  cachedMatch.personalStatus === "present" ||
-                  cachedMatch.personalStatus === "frozen" ||
-                  cachedMatch.serverReceiptAt ||
-                  cachedMatch.erpStatus ||
-                  cachedMatch.note
-                ) {
-                  return { ...s, ...cachedMatch };
-                }
-              }
-              return s;
-            });
-          });
-        }
-      })
-      .catch((err) => {
-        console.warn("Cache hydration notice:", err);
-      });
+    setSessions(defaultData.sessions);
 
     setProfile({
       id: user.uid,
@@ -4915,12 +4875,11 @@ export default function App() {
         }
       );
 
-      // 4. Class sessions listener
+      // 4. Class sessions listener (Cloud-First authoritative source of truth)
       const unsubSessions = onSnapshot(
         collection(db, "users", user.uid, "classSessions"),
         (snap) => {
           if (snap.empty) {
-            // Keep the default sessions and trigger background seeding
             ensureSistecTimetableLoaded(user.uid).catch(console.warn);
             setSessionsInitialLoading(false);
             return;
@@ -4941,7 +4900,6 @@ export default function App() {
             }
           });
 
-          // Merge: use Firestore record if present, otherwise default session (guarantees Python training is never omitted)
           let missingTrainingCount = 0;
           const mergedList: ClassSessionItem[] = defaultData.sessions.map((defaultSession) => {
             const fsSession =
@@ -4956,7 +4914,6 @@ export default function App() {
             return defaultSession;
           });
 
-          // Also include any Firestore sessions not in defaultData
           firestoreMap.forEach((fsSession, fsId) => {
             if (
               !mergedList.some(
@@ -4972,36 +4929,6 @@ export default function App() {
           setSessions(mergedList);
           setSessionsInitialLoading(false);
 
-          // Synchronize local cache with confirmed Firestore state
-          try {
-            const syncCache: Record<string, Partial<ClassSessionItem>> = {};
-            firestoreMap.forEach((sess, sid) => {
-              if (sess.personalStatus === "present" || sess.personalStatus === "absent" || sess.personalStatus === "frozen" || sess.erpStatus || sess.note) {
-                const patch: Partial<ClassSessionItem> = {
-                  personalStatus: sess.personalStatus,
-                  erpStatus: sess.erpStatus,
-                  note: sess.note,
-                  evidenceAvailable: sess.evidenceAvailable,
-                  evidenceStoragePath: sess.evidenceStoragePath,
-                  clientCaptureAt: sess.clientCaptureAt,
-                  photoDataUrl: sess.photoDataUrl && !sess.photoDataUrl.startsWith("data:") ? sess.photoDataUrl : undefined,
-                  finalized: sess.finalized,
-                  finalizedAt: sess.finalizedAt,
-                  serverReceiptAt: sess.serverReceiptAt,
-                };
-                syncCache[sid] = patch;
-                if (sess.id) {
-                  syncCache[sess.id] = patch;
-                }
-              }
-            });
-            localStorage.setItem(localStoreKey, JSON.stringify(syncCache));
-            void setCachedStore("sessions", mergedList).catch(() => {});
-          } catch (syncErr) {
-            console.warn("Local cache sync notice:", syncErr);
-          }
-
-          // If any Python training sessions were missing in Firestore, seed them now
           if (missingTrainingCount > 0) {
             ensurePythonTrainingLoaded(user.uid).catch(console.warn);
           }
