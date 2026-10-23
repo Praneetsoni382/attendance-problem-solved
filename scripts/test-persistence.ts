@@ -214,8 +214,8 @@ runTest("Test G: Denominator matches total completed eligible classes across Att
   assert.equal(stats.erp.percentage, 68.2, "ERP percentage is 68.2%");
 });
 
-// Test 8: Period 7 Test Class in today's schedule
-runTest("Test H: Period 7 Test Class is created for today (7:00 PM to 11:00 PM IST) and isolated from timetable", () => {
+// Test 8: Period 7 Test Class in today's schedule (12-hour window: 7:00 PM to 7:00 AM next day IST)
+runTest("Test H: Period 7 Test Class is created for today (7:00 PM to 7:00 AM next day IST) and isolated from timetable", () => {
   const dummyUid = "test-uid";
   const data = buildDefaultSistecData(dummyUid);
 
@@ -230,24 +230,27 @@ runTest("Test H: Period 7 Test Class is created for today (7:00 PM to 11:00 PM I
   assert.equal(p7Session.subjectCode, "TEST-P7", "Subject code must be TEST-P7");
   assert.equal(p7Session.timetableEntryId, null, "timetableEntryId must be null (isolated from timetable)");
 
-  // 3. Verify timing is 19:00 to 23:00 IST
+  // 3. Verify timing is 19:00 to 07:00 next day IST (12 hours)
   const startObj = new Date(p7Session.scheduledStartAt);
   const endObj = new Date(p7Session.scheduledEndAt);
+  const durationHours = (endObj.getTime() - startObj.getTime()) / (60 * 60 * 1000);
+  assert.equal(durationHours, 12, "Duration must be exactly 12 hours");
+
   // IST hours:
   const istStartHours = (startObj.getUTCHours() + 5 + Math.floor((startObj.getUTCMinutes() + 30) / 60)) % 24;
   const istEndHours = (endObj.getUTCHours() + 5 + Math.floor((endObj.getUTCMinutes() + 30) / 60)) % 24;
   assert.equal(istStartHours, 19, "Start time must be 7:00 PM IST (19:00)");
-  assert.equal(istEndHours, 23, "End time must be 11:00 PM IST (23:00)");
+  assert.equal(istEndHours, 7, "End time must be 7:00 AM IST (07:00) next day");
 
-  // 4. Verify within window (e.g. at 20:00 IST), isSessionInWindow returns true
-  const insideTimeMs = startObj.getTime() + 60 * 60 * 1000; // 8:00 PM IST
-  const isInside = insideTimeMs >= startObj.getTime() && insideTimeMs < endObj.getTime();
-  assert.equal(isInside, true, "Must be In Run between 7:00 PM and 11:00 PM IST");
+  // 4. Verify within window (e.g. at 20:00 IST and at 02:00 AM IST next day), isSessionInWindow returns true
+  const insideTimeMs1 = startObj.getTime() + 1 * 60 * 60 * 1000; // 8:00 PM IST
+  const insideTimeMs2 = startObj.getTime() + 7 * 60 * 60 * 1000; // 2:00 AM IST next day
+  assert.equal(insideTimeMs1 >= startObj.getTime() && insideTimeMs1 < endObj.getTime(), true, "Must be In Run at 8:00 PM IST");
+  assert.equal(insideTimeMs2 >= startObj.getTime() && insideTimeMs2 < endObj.getTime(), true, "Must be In Run at 2:00 AM IST next day");
 
-  // 5. Verify after window (e.g. at 23:05 IST), it is overdue / closed
+  // 5. Verify after window (e.g. at 07:05 AM next day), it is overdue / closed
   const afterTimeMs = endObj.getTime() + 5 * 60 * 1000;
-  const isOverdue = afterTimeMs >= endObj.getTime();
-  assert.equal(isOverdue, true, "Must be closed / overdue after 11:00 PM IST");
+  assert.equal(afterTimeMs >= endObj.getTime(), true, "Must be closed / overdue after 7:00 AM next day IST");
 });
 
 // Test 9: Multi-Device Persistence Simulation (Device 1 -> Cloud Firestore -> Device 2 clean slate)

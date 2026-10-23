@@ -1253,21 +1253,22 @@ function AttendanceCardDialog({
   }, [session?.id, session?.personalStatus, session?.erpStatus, session?.note]);
 
   const todayKey = formatDateKey(new Date());
-  const isToday = session?.scheduledDate === todayKey;
-
   const nowMs = Date.now();
   const startMs = session ? new Date(session.scheduledStartAt).getTime() : 0;
   const endMs = session ? new Date(session.scheduledEndAt).getTime() : 0;
+  const isP7 = session?.slot === "P7" || session?.subjectCode === "TEST-P7" || session?.subjectId === "sub-test-class-p7";
+  const isToday = session?.scheduledDate === todayKey || (isP7 && nowMs >= startMs && nowMs < endMs);
+
   const isFrozen = stagedPersonalStatus === "frozen" || session?.personalStatus === "frozen";
   const isPresentAlready = session?.personalStatus === "present";
   const isHistoricalTraining = Boolean(session?.isSpecialTraining || session?.subjectId === PYTHON_TRAINING_SUBJECT.id);
   const inWindow = Boolean(
     session && !session.finalized && !isPresentAlready && (
-      isHistoricalTraining || (isToday && nowMs >= startMs && nowMs < endMs)
+      isHistoricalTraining || ((isToday || isP7) && nowMs >= startMs && nowMs < endMs)
     )
   );
   const isWindowOverdue = Boolean(
-    session && !isPresentAlready && !isHistoricalTraining && (session.personalStatus === "absent" || (isToday && nowMs >= endMs))
+    session && !isPresentAlready && !isHistoricalTraining && (session.personalStatus === "absent" || ((isToday || isP7) && nowMs >= endMs))
   );
 
   // Active window countdown
@@ -2020,16 +2021,6 @@ function Dashboard({
 
   const stats = useMemo(() => computeAttendanceStats(sessions), [sessions]);
 
-  // Today's classes
-  const todayKey = formatDateKey(new Date());
-  const todaySessions = useMemo(
-    () =>
-      sessions
-        .filter((s) => s.scheduledDate === todayKey)
-        .sort((a, b) => new Date(a.scheduledStartAt).getTime() - new Date(b.scheduledStartAt).getTime()),
-    [sessions, todayKey]
-  );
-
   const [currentTick, setCurrentTick] = useState(() => Date.now());
 
   useEffect(() => {
@@ -2040,6 +2031,24 @@ function Dashboard({
   }, []);
 
   const nowMs = currentTick;
+
+  // Today's classes (including P7 if currently running across midnight)
+  const todayKey = formatDateKey(new Date());
+  const todaySessions = useMemo(
+    () =>
+      sessions
+        .filter((s) => {
+          if (s.scheduledDate === todayKey) return true;
+          if (s.slot === "P7" || s.subjectCode === "TEST-P7" || s.subjectId === "sub-test-class-p7") {
+            const start = new Date(s.scheduledStartAt).getTime();
+            const end = new Date(s.scheduledEndAt).getTime();
+            return nowMs >= start && nowMs < end;
+          }
+          return false;
+        })
+        .sort((a, b) => new Date(a.scheduledStartAt).getTime() - new Date(b.scheduledStartAt).getTime()),
+    [sessions, todayKey, nowMs]
+  );
 
   const todayCalendarInfo = useMemo(() => getCalendarDayInfo(todayKey), [todayKey]);
   const nextHoliday = useMemo(() => {

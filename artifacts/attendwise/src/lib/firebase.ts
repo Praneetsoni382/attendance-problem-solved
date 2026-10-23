@@ -780,10 +780,10 @@ export function buildDefaultSistecData(uid: string): {
     pyDayNum++;
   }
 
-  // Period 7 Test Class for today (7:00 PM to 11:00 PM IST), isolated from the daily timetable
+  // Period 7 Test Class (12-hour extended window: 7:00 PM to 7:00 AM next day IST), isolated from the daily timetable
   const todayKey = formatDateKey(now);
   const p7StartAt = makeIstDateTime(todayKey, "19:00");
-  const p7EndAt = makeIstDateTime(todayKey, "23:00");
+  const p7EndAt = new Date(p7StartAt.getTime() + 12 * 60 * 60 * 1000); // 7:00 AM onwards for the very next day (12 hours)
   const p7Overdue = now.getTime() >= p7EndAt.getTime();
   sessions.push({
     id: `session-test-class-p7-${todayKey}`,
@@ -811,6 +811,40 @@ export function buildDefaultSistecData(uid: string): {
     academicDayNumber: null,
     createdAt: now.toISOString(),
   });
+
+  // If current IST time is between midnight and 7:00 AM, also include yesterday's session whose 12-hour window is actively open until 7:00 AM today
+  const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+  const yesterdayKey = formatDateKey(yesterday);
+  const p7YestStartAt = makeIstDateTime(yesterdayKey, "19:00");
+  const p7YestEndAt = new Date(p7YestStartAt.getTime() + 12 * 60 * 60 * 1000);
+  if (now.getTime() < p7YestEndAt.getTime()) {
+    sessions.push({
+      id: `session-test-class-p7-${yesterdayKey}`,
+      studentId: uid,
+      subjectId: "sub-test-class-p7",
+      subjectName: "Test Class",
+      subjectCode: "TEST-P7",
+      timetableEntryId: null,
+      slot: "P7",
+      scheduledDate: yesterdayKey,
+      scheduledStartAt: p7YestStartAt.toISOString(),
+      scheduledEndAt: p7YestEndAt.toISOString(),
+      category: "Theory",
+      room: "Online Test Lab",
+      personalStatus: "upcoming",
+      erpStatus: null,
+      note: null,
+      canMarkPresent: true,
+      finalized: false,
+      finalizedAt: null,
+      serverReceiptAt: null,
+      clientCaptureAt: null,
+      cancelledAt: null,
+      evidenceAvailable: false,
+      academicDayNumber: null,
+      createdAt: now.toISOString(),
+    });
+  }
 
   return { subjects, timetable, sessions };
 }
@@ -855,21 +889,13 @@ export async function generateWeeklySessions(uid: string): Promise<void> {
         continue; // Never delete Python Training sessions
       }
 
-      // Purge P7 test class / slot P7 sessions permanently from database and dashboards
+      // Maintain Period 7 test class for extended student application testing
       if (
         sData.slot === "P7" ||
         sData.subjectId === "sub-test-class-p7" ||
         sData.id.startsWith("session-test-class-p7")
       ) {
-        try {
-          batch.delete(sDoc.ref);
-          opCount++;
-          if (opCount >= 400) await commitBatch();
-          existingDateIds.delete(sDoc.id);
-          continue;
-        } catch {
-          // Ignore deletion error
-        }
+        continue; // Maintain P7 test class
       }
 
       if (!isTeachingDay(sData.scheduledDate)) {
@@ -1035,10 +1061,14 @@ export async function saveCompleteAttendanceRecord(
     }
 
     const isHistoricalTraining = session.subjectId === PYTHON_TRAINING_SUBJECT.id || (session as any).isSpecialTraining;
+    const isP7TestClass = session.slot === "P7" || session.subjectId === "sub-test-class-p7" || session.subjectCode === "TEST-P7";
 
     if (!isHistoricalTraining && payload.personalStatus === "present" && session.personalStatus !== "present") {
       const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" }).format(new Date());
-      if (session.scheduledDate !== today) {
+      // For standard timetable classes, check that scheduledDate matches today.
+      // For Period 7 Test Class with 12-hour overnight window (7:00 PM to 7:00 AM next day),
+      // allow attendance across the midnight boundary as long as the current time is within the scheduled 12-hour window!
+      if (!isP7TestClass && session.scheduledDate !== today) {
         throw new Error("Attendance can only be marked for today's scheduled classes.");
       }
 
@@ -1225,8 +1255,9 @@ export async function markSessionAbsent(
     }
 
     const isHistoricalTraining = session.subjectId === PYTHON_TRAINING_SUBJECT.id || (session as any).isSpecialTraining;
+    const isP7TestClass = session.slot === "P7" || session.subjectId === "sub-test-class-p7" || session.subjectCode === "TEST-P7";
 
-    if (!isHistoricalTraining) {
+    if (!isHistoricalTraining && !isP7TestClass) {
       const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" }).format(new Date());
       if (session.scheduledDate !== today) {
         throw new Error("Attendance can only be marked for today's scheduled classes.");
