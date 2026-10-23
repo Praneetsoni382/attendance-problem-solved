@@ -121,6 +121,7 @@ export function LandingPage({ onAuthSuccess }: LandingPageProps) {
     setInfoMsg("");
     setPending(true);
     // Mark session active before authentication calls so any onAuthStateChanged listener recognizes active session
+    localStorage.setItem("attendwise_session_active", "true");
     sessionStorage.setItem("attendwise_session_active", "true");
     try {
       if (mode === "signup") {
@@ -133,6 +134,7 @@ export function LandingPage({ onAuthSuccess }: LandingPageProps) {
         onAuthSuccess(res.user);
       }
     } catch (err: any) {
+      localStorage.removeItem("attendwise_session_active");
       sessionStorage.removeItem("attendwise_session_active");
       setError(err?.message || "Authentication failed. Check your credentials.");
     } finally {

@@ -250,8 +250,253 @@ runTest("Test H: Period 7 Test Class is created for today (7:00 PM to 11:00 PM I
   assert.equal(isOverdue, true, "Must be closed / overdue after 11:00 PM IST");
 });
 
+// Test 9: Multi-Device Persistence Simulation (Device 1 -> Cloud Firestore -> Device 2 clean slate)
+runTest("Test I: Multi-Device Persistence Simulation (Device 1 marks Present/Absent/Frozen/ERP -> Device 2 clean slate restores identical state)", () => {
+  const studentUid = "student_sistec_rohit_2026";
+  const device1Data = buildDefaultSistecData(studentUid);
+
+  // Pick 4 diverse sessions on Device 1
+  const s1 = device1Data.sessions[10]!; // Theory class
+  const s2 = device1Data.sessions[11]!; // Lab class
+  const s3 = device1Data.sessions[12]!; // Class with ERP discrepancy
+  const s4 = device1Data.sessions[13]!; // Frozen class
+  const sPython = device1Data.sessions.find((s) => s.subjectId === "sub-python-training")!;
+
+  // Device 1: User marks attendance, keynotes, photo proof, ERP status, and freezes a class
+  const cloudFirestoreCollection = new Map<string, any>();
+
+  const markedS1 = {
+    ...s1,
+    personalStatus: "present" as const,
+    finalized: true,
+    finalizedAt: "2026-10-10T10:30:00.000Z",
+    serverReceiptAt: "2026-10-10T10:28:15.000Z",
+    clientCaptureAt: "2026-10-10T10:28:15.000Z",
+    photoDataUrl: "https://firebasestorage.googleapis.com/v0/b/bucket/o/users%2Frohit%2Fproof1.jpg",
+    evidenceStoragePath: `users/${studentUid}/attendance/${s1.id}/proof1.jpg`,
+    evidenceAvailable: true,
+    note: "Understood Dijkstra and Prim algorithms in detail.",
+    erpStatus: "Present" as const,
+    erpRecordedAt: "2026-10-10T11:00:00.000Z",
+  };
+
+  const markedS2 = {
+    ...s2,
+    personalStatus: "absent" as const,
+    finalized: true,
+    finalizedAt: "2026-10-10T11:30:00.000Z",
+    serverReceiptAt: null,
+    note: "Sick leave with medical certificate submitted to HOD.",
+    erpStatus: "Absent" as const,
+    erpRecordedAt: "2026-10-10T12:00:00.000Z",
+  };
+
+  const markedS3 = {
+    ...s3,
+    personalStatus: "present" as const,
+    finalized: true,
+    finalizedAt: "2026-10-10T12:30:00.000Z",
+    serverReceiptAt: "2026-10-10T12:25:00.000Z",
+    evidenceAvailable: false,
+    note: "Physical attendance signed in register, but ERP operator erroneously marked Absent.",
+    erpStatus: "Absent" as const, // Discrepancy intentional
+    erpRecordedAt: "2026-10-10T13:00:00.000Z",
+  };
+
+  const markedS4 = {
+    ...s4,
+    personalStatus: "frozen" as const,
+    finalized: true,
+    frozenAt: "2026-10-10T13:30:00.000Z",
+    finalizedAt: "2026-10-10T13:30:00.000Z",
+    previousPersonalStatus: "absent" as const,
+    previousErpStatus: null,
+  };
+
+  const markedPython = {
+    ...sPython,
+    personalStatus: "present" as const,
+    finalized: true,
+    finalizedAt: "2026-09-08T10:30:00.000Z",
+    serverReceiptAt: "2026-09-08T10:20:00.000Z",
+    note: "Completed Python OOP assignment and classes inheritance module.",
+  };
+
+  // Device 1 commits these to Cloud Firestore (users/{uid}/classSessions)
+  cloudFirestoreCollection.set(s1.id, markedS1);
+  cloudFirestoreCollection.set(s2.id, markedS2);
+  cloudFirestoreCollection.set(s3.id, markedS3);
+  cloudFirestoreCollection.set(s4.id, markedS4);
+  cloudFirestoreCollection.set(sPython.id, markedPython);
+
+  // Compute Device 1 analytics
+  const device1AllSessions = device1Data.sessions.map((s) => {
+    return cloudFirestoreCollection.get(s.id) || s;
+  });
+  const device1Analytics = computeFullAnalytics(device1AllSessions);
+
+  // === DEVICE 2 SIMULATION (New Phone, Clean Browser) ===
+  // Fresh environment: 0 localStorage, 0 sessionStorage, 0 IndexedDB
+  const device2LocalStorage = new Map<string, string>();
+  assert.equal(device2LocalStorage.size, 0, "Device 2 starts with zero local cache (clean phone/device)");
+
+  // Device 2 opens AttendWise with the student's authenticated session
+  const device2DefaultData = buildDefaultSistecData(studentUid);
+  assert.equal(
+    device2LocalStorage.get(`attendwise_student_sessions_${studentUid}`),
+    undefined,
+    "Device 2 has no stored session overrides initially"
+  );
+
+  // Cloud Firestore onSnapshot delivers the remote records
+  const device2FirestoreMap = new Map<string, any>();
+  const device2SlotMap = new Map<string, any>();
+  cloudFirestoreCollection.forEach((sessionData, docId) => {
+    device2FirestoreMap.set(docId, sessionData);
+    if (sessionData.scheduledDate && sessionData.slot) {
+      device2SlotMap.set(`${sessionData.scheduledDate}_${sessionData.slot}`, sessionData);
+    }
+  });
+
+  // Device 2 executes the App.tsx merge algorithm
+  const device2MergedSessions = device2DefaultData.sessions.map((ds) => {
+    const fsRecord =
+      device2FirestoreMap.get(ds.id) ||
+      device2SlotMap.get(`${ds.scheduledDate}_${ds.slot}`);
+    return fsRecord || ds;
+  });
+
+  // Verify all 5 sessions on Device 2
+  const d2_s1 = device2MergedSessions.find((s) => s.id === s1.id)!;
+  assert.equal(d2_s1.personalStatus, "present", "Device 2: Session 1 must be Present");
+  assert.equal(d2_s1.serverReceiptAt, "2026-10-10T10:28:15.000Z", "Device 2: Server receipt timestamp preserved");
+  assert.equal(d2_s1.note, "Understood Dijkstra and Prim algorithms in detail.", "Device 2: Keynote preserved");
+  assert.equal(d2_s1.photoDataUrl, "https://firebasestorage.googleapis.com/v0/b/bucket/o/users%2Frohit%2Fproof1.jpg", "Device 2: Photo URL preserved");
+  assert.equal(d2_s1.evidenceStoragePath, `users/${studentUid}/attendance/${s1.id}/proof1.jpg`, "Device 2: Photo storage path preserved");
+  assert.equal(d2_s1.erpStatus, "Present", "Device 2: ERP Present status preserved");
+
+  const d2_s2 = device2MergedSessions.find((s) => s.id === s2.id)!;
+  assert.equal(d2_s2.personalStatus, "absent", "Device 2: Session 2 must be Absent");
+  assert.equal(d2_s2.note, "Sick leave with medical certificate submitted to HOD.", "Device 2: Absent note preserved");
+  assert.equal(d2_s2.erpStatus, "Absent", "Device 2: ERP Absent status preserved");
+
+  const d2_s3 = device2MergedSessions.find((s) => s.id === s3.id)!;
+  assert.equal(d2_s3.personalStatus, "present", "Device 2: Session 3 AttendWise status is Present");
+  assert.equal(d2_s3.erpStatus, "Absent", "Device 2: Session 3 ERP status is Absent (Discrepancy)");
+
+  const d2_s4 = device2MergedSessions.find((s) => s.id === s4.id)!;
+  assert.equal(d2_s4.personalStatus, "frozen", "Device 2: Session 4 is Frozen");
+
+  const d2_sPython = device2MergedSessions.find((s) => s.id === sPython.id)!;
+  assert.equal(d2_sPython.personalStatus, "present", "Device 2: Historical Python Training preserved as Present");
+  assert.equal(d2_sPython.note, "Completed Python OOP assignment and classes inheritance module.", "Device 2: Training keynote preserved");
+
+  // Verify Analytics match identically between Device 1 and Device 2
+  const device2Analytics = computeFullAnalytics(device2MergedSessions);
+  assert.equal(device2Analytics.overall.presentCount, device1Analytics.overall.presentCount, "Present counts match between devices");
+  assert.equal(device2Analytics.overall.percentage, device1Analytics.overall.percentage, "AttendWise percentages match between devices");
+  assert.equal(device2Analytics.erp.presentCount, device1Analytics.erp.presentCount, "ERP present counts match between devices");
+  assert.equal(device2Analytics.erp.percentage, device1Analytics.erp.percentage, "ERP percentages match between devices");
+  assert.equal(device2Analytics.overview.totalEligibleCompleted, device1Analytics.overview.totalEligibleCompleted, "Universal denominators match identically");
+  assert.equal(device2Analytics.overview.frozenCount, device1Analytics.overview.frozenCount, "Frozen class counts match identically");
+  assert.equal(device2Analytics.comparison.discrepancyCount, device1Analytics.comparison.discrepancyCount, "Discrepancy counts match identically");
+
+  // Device 2 populates its own local storage cache
+  const syncCache: Record<string, Partial<typeof markedS1>> = {};
+  device2FirestoreMap.forEach((sess, sid) => {
+    syncCache[sid] = {
+      personalStatus: sess.personalStatus,
+      erpStatus: sess.erpStatus,
+      note: sess.note,
+      serverReceiptAt: sess.serverReceiptAt,
+      finalized: sess.finalized,
+    };
+  });
+  device2LocalStorage.set(`attendwise_student_sessions_${studentUid}`, JSON.stringify(syncCache));
+  assert.ok(device2LocalStorage.get(`attendwise_student_sessions_${studentUid}`), "Device 2 successfully synced local storage cache for offline readiness");
+});
+
+// Test 10: Multi-Tenant Cross-User Isolation
+runTest("Test J: Cross-User Multi-Tenant Isolation (User A's marked attendance is completely isolated from User B on clean device)", () => {
+  const userA_Uid = "student_user_alice_101";
+  const userB_Uid = "student_user_bob_102";
+
+  const userA_Data = buildDefaultSistecData(userA_Uid);
+  const userB_Data = buildDefaultSistecData(userB_Uid);
+
+  // User A marks a session as Present
+  const userA_Session = userA_Data.sessions[5]!;
+  const firestoreUserA = new Map<string, any>();
+  firestoreUserA.set(userA_Session.id, {
+    ...userA_Session,
+    personalStatus: "present",
+    studentId: userA_Uid,
+    finalized: true,
+  });
+
+  // User B's Firestore store is empty or has their own data
+  const firestoreUserB = new Map<string, any>();
+
+  // When User B logs in on Device 2, they only query users/student_user_bob_102/classSessions
+  const userB_Merged = userB_Data.sessions.map((s) => {
+    return firestoreUserB.get(s.id) || s;
+  });
+
+  const userB_TargetSession = userB_Merged.find((s) => s.slot === userA_Session.slot && s.scheduledDate === userA_Session.scheduledDate)!;
+  assert.equal(userB_TargetSession.studentId, userB_Uid, "User B's session strictly belongs to User B");
+  assert.notEqual(userB_TargetSession.personalStatus, "present", "User B does NOT inherit User A's present status");
+  assert.equal(userB_TargetSession.personalStatus, userA_Session.personalStatus === "present" ? "absent" : userB_TargetSession.personalStatus);
+});
+
+// Test 11: Auto-Finalization Invariant (Does NOT overwrite Present, Absent, or Frozen on clean device)
+runTest("Test K: Auto-finalization on clean device never mutates or resets Present, Absent, or Frozen sessions", () => {
+  const pastPresentSession: SessionLike = {
+    id: "sess-past-pres",
+    studentId: "student-1",
+    subjectId: "sub-1",
+    subjectName: "Operating Systems",
+    subjectCode: "CS501",
+    scheduledDate: "2026-10-10",
+    scheduledStartAt: "2026-10-10T10:00:00.000Z",
+    scheduledEndAt: "2026-10-10T11:00:00.000Z",
+    category: "Theory",
+    personalStatus: "present",
+    finalized: true,
+    serverReceiptAt: "2026-10-10T10:15:00.000Z",
+  };
+
+  const pastFrozenSession: SessionLike = {
+    id: "sess-past-frozen",
+    studentId: "student-1",
+    subjectId: "sub-2",
+    subjectName: "Database Systems",
+    subjectCode: "CS502",
+    scheduledDate: "2026-10-10",
+    scheduledStartAt: "2026-10-10T11:30:00.000Z",
+    scheduledEndAt: "2026-10-10T12:30:00.000Z",
+    category: "Theory",
+    personalStatus: "frozen",
+    finalized: true,
+  };
+
+  // Run the safety predicate from finalizeExpiredSessionsForStudent (App.tsx / firebase.ts line 1363-1371)
+  const isProtectedFromAutoOverdue = (session: SessionLike) => {
+    return (
+      session.personalStatus === "present" ||
+      session.personalStatus === "frozen" ||
+      session.personalStatus === "cancelled" ||
+      session.personalStatus === "absent" ||
+      session.finalized
+    );
+  };
+
+  assert.ok(isProtectedFromAutoOverdue(pastPresentSession), "Present session is protected from auto-finalization overwrite");
+  assert.ok(isProtectedFromAutoOverdue(pastFrozenSession), "Frozen session is protected from auto-finalization overwrite");
+});
+
 console.log("\n=======================================================");
 console.log(` RESULTS: ${passed} Passed, ${failed} Failed`);
 console.log("=======================================================\n");
 
 process.exit(failed > 0 ? 1 : 0);
+

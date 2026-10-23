@@ -4746,31 +4746,25 @@ export default function App() {
 
   // Listen to Firebase Auth state
   useEffect(() => {
-    const sessionActive = sessionStorage.getItem("attendwise_session_active");
-    if (!sessionActive) {
-      // Fresh browser visit or website reopening: strictly clear persisted login session so Landing Page is shown
-      logOutStudent().catch(() => {});
-      logoutStudentUser();
-    }
+    const sessionActive =
+      localStorage.getItem("attendwise_session_active") ||
+      sessionStorage.getItem("attendwise_session_active");
 
     const unsubscribe = auth.onAuthStateChanged(async (currentUser) => {
-      const activeFlag = sessionStorage.getItem("attendwise_session_active");
-      if (currentUser && activeFlag) {
-        setUser(currentUser);
-      } else if (!currentUser) {
-        // If not in Firebase Auth, check local student session if session was activated
-        const localActive = activeFlag ? getStoredActiveSession() : null;
-        if (localActive) {
-          setUser(localActive);
+      if (currentUser) {
+        localStorage.setItem("attendwise_session_active", "true");
+        sessionStorage.setItem("attendwise_session_active", "true");
+        setUser((prev) => (prev?.uid === currentUser.uid ? prev : currentUser));
+      } else {
+        // If not in Firebase Auth, check local student session
+        const localActive = getStoredActiveSession();
+        if (localActive && sessionActive) {
+          localStorage.setItem("attendwise_session_active", "true");
+          sessionStorage.setItem("attendwise_session_active", "true");
+          setUser((prev) => (prev?.uid === localActive.uid ? prev : localActive));
         } else {
           setUser(null);
-          logoutStudentUser();
         }
-      } else {
-        // currentUser exists but activeFlag is not set (e.g. stale persisted auth from previous browser session)
-        setUser(null);
-        logOutStudent().catch(() => {});
-        logoutStudentUser();
       }
       setAuthLoading(false);
     });
@@ -4830,11 +4824,29 @@ export default function App() {
       .then((cached) => {
         if (cached?.sessions && cached.sessions.length > 0) {
           setSessions((current) => {
-            const hasServerData = current.some((s) => s.serverReceiptAt);
-            if (!hasServerData) {
+            const currentHasStatus = current.some(
+              (s) => s.personalStatus === "present" || s.personalStatus === "absent" || s.personalStatus === "frozen" || s.serverReceiptAt
+            );
+            if (!currentHasStatus) {
               return cached.sessions;
             }
-            return current;
+            const cacheMap = new Map<string, ClassSessionItem>();
+            cached.sessions.forEach((cs) => {
+              cacheMap.set(cs.id, cs);
+              if (cs.scheduledDate && cs.slot) {
+                cacheMap.set(`${cs.scheduledDate}_${cs.slot}`, cs);
+              }
+            });
+            return current.map((s) => {
+              if (s.personalStatus === "present" || s.personalStatus === "absent" || s.personalStatus === "frozen") {
+                return s;
+              }
+              const cachedMatch = cacheMap.get(s.id) || cacheMap.get(`${s.scheduledDate}_${s.slot}`);
+              if (cachedMatch && cachedMatch.personalStatus !== "upcoming" && cachedMatch.personalStatus !== "unmarked") {
+                return { ...s, ...cachedMatch };
+              }
+              return s;
+            });
           });
         }
       })
@@ -4919,23 +4931,26 @@ export default function App() {
           }
 
           const firestoreMap = new Map<string, ClassSessionItem>();
+          const slotMap = new Map<string, ClassSessionItem>();
+
           snap.forEach((d) => {
-            const item = d.data() as ClassSessionItem;
-            if (
-              isTeachingDay(item.scheduledDate) ||
-              item.isSpecialTraining ||
-              item.subjectId === "sub-python-training" ||
-              item.slot === "P7" ||
-              item.id.startsWith("session-test-class-p7")
-            ) {
+            const data = d.data() as ClassSessionItem;
+            const item: ClassSessionItem = { ...data, id: d.id || data.id };
+            firestoreMap.set(d.id, item);
+            if (item.id) {
               firestoreMap.set(item.id, item);
+            }
+            if (item.scheduledDate && item.slot) {
+              slotMap.set(`${item.scheduledDate}_${item.slot}`, item);
             }
           });
 
           // Merge: use Firestore record if present, otherwise default session (guarantees Python training is never omitted)
           let missingTrainingCount = 0;
           const mergedList: ClassSessionItem[] = defaultData.sessions.map((defaultSession) => {
-            const fsSession = firestoreMap.get(defaultSession.id);
+            const fsSession =
+              firestoreMap.get(defaultSession.id) ||
+              slotMap.get(`${defaultSession.scheduledDate}_${defaultSession.slot}`);
             if (fsSession) {
               return fsSession;
             }
@@ -4947,7 +4962,13 @@ export default function App() {
 
           // Also include any Firestore sessions not in defaultData
           firestoreMap.forEach((fsSession, fsId) => {
-            if (!defaultData.sessions.some((ds) => ds.id === fsId)) {
+            if (
+              !mergedList.some(
+                (ds) =>
+                  ds.id === fsId ||
+                  (ds.scheduledDate === fsSession.scheduledDate && ds.slot === fsSession.slot)
+              )
+            ) {
               mergedList.push(fsSession);
             }
           });
@@ -4960,7 +4981,7 @@ export default function App() {
             const syncCache: Record<string, Partial<ClassSessionItem>> = {};
             firestoreMap.forEach((sess, sid) => {
               if (sess.personalStatus === "present" || sess.personalStatus === "absent" || sess.personalStatus === "frozen" || sess.erpStatus || sess.note) {
-                syncCache[sid] = {
+                const patch: Partial<ClassSessionItem> = {
                   personalStatus: sess.personalStatus,
                   erpStatus: sess.erpStatus,
                   note: sess.note,
@@ -4972,6 +4993,10 @@ export default function App() {
                   finalizedAt: sess.finalizedAt,
                   serverReceiptAt: sess.serverReceiptAt,
                 };
+                syncCache[sid] = patch;
+                if (sess.id) {
+                  syncCache[sess.id] = patch;
+                }
               }
             });
             localStorage.setItem(localStoreKey, JSON.stringify(syncCache));
@@ -4993,15 +5018,16 @@ export default function App() {
       );
 
       return () => {
-        unsubProfile();
-        unsubSubjects();
-        unsubTimetable();
-        unsubSessions();
+        try { unsubProfile(); } catch {}
+        try { unsubSubjects(); } catch {}
+        try { unsubTimetable(); } catch {}
+        try { unsubSessions(); } catch {}
       };
     }
-  }, [user]);
+  }, [user?.uid]);
 
   const handleLogout = async () => {
+    localStorage.removeItem("attendwise_session_active");
     sessionStorage.removeItem("attendwise_session_active");
     await logoutStudentUser();
     await logOutStudent().catch(() => {});
@@ -5041,9 +5067,9 @@ export default function App() {
     const prevSession = sessions.find((s) => s.id === sessionId);
 
     // 1. Instant optimistic update so analytics recompute with 0ms delay:
-    setSessions((prev) =>
-      prev.map((s) => (s.id === sessionId ? { ...s, erpStatus: status } : s))
-    );
+    const updated = sessions.map((s) => (s.id === sessionId ? { ...s, erpStatus: status } : s));
+    setSessions(updated);
+    void setCachedStore("sessions", updated).catch(() => {});
 
     // 2. Persist to Firestore with rollback on error:
     try {
@@ -5051,7 +5077,9 @@ export default function App() {
       persistLocalSessionOverride(sessionId, { erpStatus: status });
     } catch (err) {
       if (prevSession) {
-        setSessions((prev) => prev.map((s) => (s.id === sessionId ? prevSession : s)));
+        const reverted = sessions.map((s) => (s.id === sessionId ? prevSession : s));
+        setSessions(reverted);
+        void setCachedStore("sessions", reverted).catch(() => {});
       }
       throw err;
     }
@@ -5066,23 +5094,23 @@ export default function App() {
     const finalCapturedAt = capturedAt || (photoUrl ? nowIso : undefined);
 
     // 1. Instant optimistic update:
-    setSessions((prev) =>
-      prev.map((s) =>
-        s.id === sessionId
-          ? {
-              ...s,
-              personalStatus: "present",
-              finalized: true,
-              finalizedAt: nowIso,
-              serverReceiptAt: nowIso,
-              clientCaptureAt: finalCapturedAt || s.clientCaptureAt,
-              photoDataUrl: photoUrl || s.photoDataUrl,
-              evidenceAvailable: Boolean(photoUrl || s.photoDataUrl || s.evidenceAvailable),
-              note: note !== undefined ? note : s.note,
-            }
-          : s
-      )
+    const updated = sessions.map((s) =>
+      s.id === sessionId
+        ? {
+            ...s,
+            personalStatus: "present" as const,
+            finalized: true,
+            finalizedAt: nowIso,
+            serverReceiptAt: nowIso,
+            clientCaptureAt: finalCapturedAt || s.clientCaptureAt,
+            photoDataUrl: photoUrl || s.photoDataUrl,
+            evidenceAvailable: Boolean(photoUrl || s.photoDataUrl || s.evidenceAvailable),
+            note: note !== undefined ? note : s.note,
+          }
+        : s
     );
+    setSessions(updated);
+    void setCachedStore("sessions", updated).catch(() => {});
 
     // 2. Persist to Firestore with rollback on error:
     try {
@@ -5098,7 +5126,9 @@ export default function App() {
       });
     } catch (err) {
       if (prevSession) {
-        setSessions((prev) => prev.map((s) => (s.id === sessionId ? prevSession : s)));
+        const reverted = sessions.map((s) => (s.id === sessionId ? prevSession : s));
+        setSessions(reverted);
+        void setCachedStore("sessions", reverted).catch(() => {});
       }
       throw err;
     }
@@ -5111,20 +5141,20 @@ export default function App() {
     const prevSession = sessions.find((s) => s.id === sessionId);
     const nowIso = new Date().toISOString();
 
-    setSessions((prev) =>
-      prev.map((s) =>
-        s.id === sessionId
-          ? {
-              ...s,
-              personalStatus: "absent",
-              absentType: "manual_student",
-              finalized: true,
-              finalizedAt: nowIso,
-              note: note !== undefined ? note : s.note,
-            }
-          : s
-      )
+    const updated = sessions.map((s) =>
+      s.id === sessionId
+        ? {
+            ...s,
+            personalStatus: "absent" as const,
+            absentType: "manual_student" as const,
+            finalized: true,
+            finalizedAt: nowIso,
+            note: note !== undefined ? note : s.note,
+          }
+        : s
     );
+    setSessions(updated);
+    void setCachedStore("sessions", updated).catch(() => {});
 
     try {
       await markSessionAbsent(user.uid, sessionId, note);
@@ -5137,7 +5167,9 @@ export default function App() {
       });
     } catch (err) {
       if (prevSession) {
-        setSessions((prev) => prev.map((s) => (s.id === sessionId ? prevSession : s)));
+        const reverted = sessions.map((s) => (s.id === sessionId ? prevSession : s));
+        setSessions(reverted);
+        void setCachedStore("sessions", reverted).catch(() => {});
       }
       throw err;
     }
@@ -5146,21 +5178,21 @@ export default function App() {
   const handleFreezeClassQuick = async (sessionId: string) => {
     const nowIso = new Date().toISOString();
     // 1. Instant optimistic update across all sessions in real-time
-    setSessions((prev) =>
-      prev.map((s) =>
-        s.id === sessionId
-          ? {
-              ...s,
-              personalStatus: "frozen",
-              finalized: true,
-              frozenAt: nowIso,
-              finalizedAt: nowIso,
-              previousPersonalStatus: s.personalStatus !== "frozen" ? s.personalStatus : "absent",
-              previousErpStatus: s.erpStatus ?? null,
-            }
-          : s
-      )
+    const updated = sessions.map((s) =>
+      s.id === sessionId
+        ? {
+            ...s,
+            personalStatus: "frozen" as const,
+            finalized: true,
+            frozenAt: nowIso,
+            finalizedAt: nowIso,
+            previousPersonalStatus: s.personalStatus !== "frozen" ? s.personalStatus : "absent",
+            previousErpStatus: s.erpStatus ?? null,
+          }
+        : s
     );
+    setSessions(updated);
+    void setCachedStore("sessions", updated).catch(() => {});
     persistLocalSessionOverride(sessionId, {
       personalStatus: "frozen",
       finalized: true,
@@ -5174,19 +5206,19 @@ export default function App() {
   };
 
   const handleUnfreezeClassQuick = async (sessionId: string) => {
-    setSessions((prev) =>
-      prev.map((s) => {
-        if (s.id !== sessionId) return s;
-        const restoredStatus =
-          (s as any).previousPersonalStatus === "present" ? "present" : "absent";
-        return {
-          ...s,
-          personalStatus: restoredStatus,
-          frozenAt: null,
-          finalized: true,
-        };
-      })
-    );
+    const updated = sessions.map((s) => {
+      if (s.id !== sessionId) return s;
+      const restoredStatus =
+        (s as any).previousPersonalStatus === "present" ? "present" : "absent";
+      return {
+        ...s,
+        personalStatus: restoredStatus as const,
+        frozenAt: null,
+        finalized: true,
+      };
+    });
+    setSessions(updated);
+    void setCachedStore("sessions", updated).catch(() => {});
     persistLocalSessionOverride(sessionId, {
       personalStatus: "absent",
       frozenAt: null,
@@ -5207,6 +5239,7 @@ export default function App() {
 
   if (!user) {
     return <LandingPage onAuthSuccess={(loggedInUser) => {
+      localStorage.setItem("attendwise_session_active", "true");
       sessionStorage.setItem("attendwise_session_active", "true");
       const active = loggedInUser || auth.currentUser || getStoredActiveSession();
       if (active) {

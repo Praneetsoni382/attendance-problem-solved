@@ -10,7 +10,7 @@ import {
   updateProfile,
   onAuthStateChanged,
   setPersistence,
-  browserSessionPersistence,
+  browserLocalPersistence,
   type User,
 } from "firebase/auth";
 import {
@@ -32,6 +32,7 @@ import {
   serverTimestamp,
   getDocFromServer,
   runTransaction,
+  setLogLevel,
 } from "firebase/firestore";
 import {
   getStorage,
@@ -58,11 +59,26 @@ import {
   BTECH_3RD_TEACHING_DAYS,
 } from "../data/sistec-calendar";
 
+// Suppress benign internal SDK multi-tab lease-loss messages caught internally by Firestore
+setLogLevel("silent");
+if (typeof window !== "undefined") {
+  const originalConsoleError = console.error;
+  console.error = (...args: unknown[]) => {
+    if (
+      typeof args[0] === "string" &&
+      args[0].includes("Failed to obtain primary lease for action 'Release target'")
+    ) {
+      return;
+    }
+    originalConsoleError.apply(console, args);
+  };
+}
+
 // Initialize Firebase with IndexedDB persistent local cache to prevent quota exhaustion
 const app = getApps().length > 0 ? getApps()[0]! : initializeApp(firebaseConfig);
 export const auth = getAuth(app);
-setPersistence(auth, browserSessionPersistence).catch((err) => {
-  console.warn("Auth session persistence notice:", err);
+setPersistence(auth, browserLocalPersistence).catch((err) => {
+  console.warn("Auth local persistence notice:", err);
 });
 export const db = initializeFirestore(
   app,
@@ -763,6 +779,38 @@ export function buildDefaultSistecData(uid: string): {
     }
     pyDayNum++;
   }
+
+  // Period 7 Test Class for today (7:00 PM to 11:00 PM IST), isolated from the daily timetable
+  const todayKey = formatDateKey(now);
+  const p7StartAt = makeIstDateTime(todayKey, "19:00");
+  const p7EndAt = makeIstDateTime(todayKey, "23:00");
+  const p7Overdue = now.getTime() >= p7EndAt.getTime();
+  sessions.push({
+    id: `session-test-class-p7-${todayKey}`,
+    studentId: uid,
+    subjectId: "sub-test-class-p7",
+    subjectName: "Test Class",
+    subjectCode: "TEST-P7",
+    timetableEntryId: null,
+    slot: "P7",
+    scheduledDate: todayKey,
+    scheduledStartAt: p7StartAt.toISOString(),
+    scheduledEndAt: p7EndAt.toISOString(),
+    category: "Theory",
+    room: "Online Test Lab",
+    personalStatus: p7Overdue ? "absent" : "upcoming",
+    erpStatus: null,
+    note: null,
+    canMarkPresent: !p7Overdue,
+    finalized: p7Overdue,
+    finalizedAt: p7Overdue ? p7EndAt.toISOString() : null,
+    serverReceiptAt: null,
+    clientCaptureAt: null,
+    cancelledAt: null,
+    evidenceAvailable: false,
+    academicDayNumber: null,
+    createdAt: now.toISOString(),
+  });
 
   return { subjects, timetable, sessions };
 }
