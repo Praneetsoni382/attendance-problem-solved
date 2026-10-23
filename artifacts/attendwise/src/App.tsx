@@ -4902,32 +4902,9 @@ export default function App() {
   const [sessionsInitialLoading, setSessionsInitialLoading] = useState(true);
   const [, setLocation] = useLocation();
 
-  // Listen to Firebase Auth state
+  // Ensure user always lands on LandingPage first upon visiting website
   useEffect(() => {
-    const sessionActive =
-      localStorage.getItem("attendwise_session_active") ||
-      sessionStorage.getItem("attendwise_session_active");
-
-    const unsubscribe = auth.onAuthStateChanged(async (currentUser) => {
-      if (currentUser) {
-        localStorage.setItem("attendwise_session_active", "true");
-        sessionStorage.setItem("attendwise_session_active", "true");
-        setUser((prev) => (prev?.uid === currentUser.uid ? prev : currentUser));
-      } else {
-        // If not in Firebase Auth, check local student session
-        const localActive = getStoredActiveSession();
-        if (localActive && sessionActive) {
-          localStorage.setItem("attendwise_session_active", "true");
-          sessionStorage.setItem("attendwise_session_active", "true");
-          setUser((prev) => (prev?.uid === localActive.uid ? prev : localActive));
-        } else {
-          setUser(null);
-        }
-      }
-      setAuthLoading(false);
-    });
-
-    return () => unsubscribe();
+    setAuthLoading(false);
   }, []);
 
   // Listen to Firestore data when user is authenticated with Firebase, or initialize local SISTec data
