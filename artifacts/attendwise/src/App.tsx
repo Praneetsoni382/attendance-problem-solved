@@ -4268,12 +4268,12 @@ function SessionDetail({
   const snapPhoto = () => {
     if (!videoRef.current) return;
     const canvas = document.createElement("canvas");
-    canvas.width = videoRef.current.videoWidth || 640;
-    canvas.height = videoRef.current.videoHeight || 480;
+    canvas.width = Math.min(videoRef.current.videoWidth || 320, 320);
+    canvas.height = Math.min(videoRef.current.videoHeight || 240, 240);
     const ctx = canvas.getContext("2d");
     if (ctx) {
       ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
-      const dataUrl = canvas.toDataURL("image/jpeg", 0.7);
+      const dataUrl = canvas.toDataURL("image/jpeg", 0.5);
       const captureInstant = new Date().toISOString();
       setCapturedPhotoUrl(dataUrl);
       setCapturedPhotoAt(captureInstant);

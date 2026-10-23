@@ -959,20 +959,25 @@ export {
   BTECH_3RD_TEACHING_DAYS,
 };
 
-// Utility to compress base64 images into lightweight thumbnails (<30KB-80KB) that fit safely inside Firestore & IndexedDB
-export function compressImageBase64(dataUrl: string, maxDimension = 320, quality = 0.5): Promise<string> {
+// Utility to compress base64 images into lightweight thumbnails (<15KB-30KB) that fit safely inside Firestore & IndexedDB
+export function compressImageBase64(dataUrl: string, maxDimension = 240, quality = 0.4): Promise<string> {
   return new Promise((resolve) => {
     if (!dataUrl || !dataUrl.startsWith("data:image")) {
-      return resolve(dataUrl ? truncateOrDownscaleBase64(dataUrl) : "");
+      return resolve(dataUrl ? truncateOrDownscaleBase64(dataUrl, 35000) : "");
     }
-    if (typeof window === "undefined" || typeof document === "undefined") {
-      return resolve(truncateOrDownscaleBase64(dataUrl));
+
+    if (dataUrl.length <= 35000) {
+      return resolve(dataUrl);
+    }
+
+    if (typeof window === "undefined" || typeof document === "undefined" || typeof Image === "undefined") {
+      return resolve(truncateOrDownscaleBase64(dataUrl, 35000));
     }
 
     // Safety timeout: Never let image compression hang indefinitely
     const timer = setTimeout(() => {
-      resolve(truncateOrDownscaleBase64(dataUrl));
-    }, 2500);
+      resolve(truncateOrDownscaleBase64(dataUrl, 35000));
+    }, 1500);
 
     const img = new Image();
     img.onload = () => {
@@ -993,41 +998,52 @@ export function compressImageBase64(dataUrl: string, maxDimension = 320, quality
         canvas.width = Math.max(width, 1);
         canvas.height = Math.max(height, 1);
         const ctx = canvas.getContext("2d");
-        if (!ctx) return resolve(truncateOrDownscaleBase64(dataUrl));
+        if (!ctx) return resolve(truncateOrDownscaleBase64(dataUrl, 35000));
         ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
         let compressed = canvas.toDataURL("image/jpeg", quality);
 
-        // If still over 100KB, re-compress aggressively
-        if (compressed.length > 100000) {
-          compressed = canvas.toDataURL("image/jpeg", 0.3);
-        }
-
-        if (compressed.length > 150000) {
+        // If still over 35KB, downscale canvas further
+        if (compressed.length > 35000) {
           const canvasSmall = document.createElement("canvas");
-          canvasSmall.width = 200;
-          canvasSmall.height = Math.round((height * 200) / width) || 150;
+          canvasSmall.width = 160;
+          canvasSmall.height = Math.round((height * 160) / width) || 120;
           const ctxSmall = canvasSmall.getContext("2d");
           if (ctxSmall) {
             ctxSmall.drawImage(img, 0, 0, canvasSmall.width, canvasSmall.height);
             compressed = canvasSmall.toDataURL("image/jpeg", 0.3);
           }
         }
+
+        if (compressed.length > 35000) {
+          compressed = truncateOrDownscaleBase64(compressed, 35000);
+        }
+
         resolve(compressed);
       } catch {
-        resolve(truncateOrDownscaleBase64(dataUrl));
+        resolve(truncateOrDownscaleBase64(dataUrl, 35000));
       }
     };
     img.onerror = () => {
       clearTimeout(timer);
-      resolve(truncateOrDownscaleBase64(dataUrl));
+      resolve(truncateOrDownscaleBase64(dataUrl, 35000));
     };
     img.src = dataUrl;
   });
 }
 
-function truncateOrDownscaleBase64(dataUrl: string): string {
+function truncateOrDownscaleBase64(dataUrl: string, maxBytes = 35000): string {
   if (!dataUrl) return "";
-  return dataUrl;
+  if (dataUrl.length <= maxBytes) return dataUrl;
+
+  const headerMatch = dataUrl.match(/^(data:image\/[a-zA-Z]+;base64,)/);
+  const header = headerMatch ? headerMatch[1] : "data:image/jpeg;base64,";
+  const rawBase64 = dataUrl.startsWith("data:") ? dataUrl.slice(header.length) : dataUrl;
+
+  const targetRawLen = Math.max(0, maxBytes - header.length);
+  const alignedLen = targetRawLen - (targetRawLen % 4);
+  const truncatedRaw = rawBase64.slice(0, alignedLen);
+
+  return `${header}${truncatedRaw}`;
 }
 
 // Atomic Complete Attendance & Evidence Saver (Unified Cloud Firestore Transaction)
@@ -1055,9 +1071,9 @@ export async function saveCompleteAttendanceRecord(
   let compressedPhotoUrl: string | null = null;
   if (payload.photoDataUrl && payload.photoDataUrl.startsWith("data:")) {
     try {
-      compressedPhotoUrl = await compressImageBase64(payload.photoDataUrl, 320, 0.5);
+      compressedPhotoUrl = await compressImageBase64(payload.photoDataUrl, 240, 0.4);
     } catch {
-      compressedPhotoUrl = truncateOrDownscaleBase64(payload.photoDataUrl);
+      compressedPhotoUrl = truncateOrDownscaleBase64(payload.photoDataUrl, 35000);
     }
   } else if (payload.photoDataUrl && payload.photoDataUrl.startsWith("http")) {
     compressedPhotoUrl = payload.photoDataUrl;
