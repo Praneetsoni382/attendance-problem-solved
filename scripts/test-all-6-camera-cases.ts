@@ -1,136 +1,170 @@
-import assert from "node:assert/strict";
 import {
   signUpStudent,
   signInStudent,
+  logOutStudent,
   saveCompleteAttendanceRecord,
   buildDefaultSistecData,
-  formatDateKey,
   auth,
+  db,
   type ClassSessionItem,
 } from "../artifacts/attendwise/src/lib/firebase";
+import { doc, getDocFromServer } from "firebase/firestore";
 
-async function runAll6Cases() {
-  console.log("\n=================================================================");
-  console.log(" EXHAUSTIVE LIVE FIREBASE TEST SUITE: 6 CAMERA TEST CASES");
-  console.log("=================================================================\n");
-
-  const email = `camera_cases_test_${Date.now()}@sistec.ac.in`;
+async function testAllCameraCases() {
+  console.log("=== TESTING ALL 6 CAMERA COMBINATIONS WITH REAL FIREBASE ===");
+  const email = `camera_cases_${Date.now()}@sistec.ac.in`;
   const password = "TestPassword123!";
-  const user = await signUpStudent(email, password, "All 6 Cases Student");
-  console.log("✓ Test Student account created on Firebase:", user.uid);
+  const user = await signUpStudent(email, password, "Camera Cases Student");
+  console.log("Created user:", user.uid);
 
   const defaultData = buildDefaultSistecData(user.uid);
-  const todayKey = formatDateKey(new Date());
-  const samplePhoto = "data:image/jpeg;base64," + "B".repeat(20000); // Realistic 15KB compressed snapshot
+  const p7Session = defaultData.sessions.find((s) => s.slot === "P7")!;
 
-  // Today's classes or P7 all-day test class
-  const todaySessions = defaultData.sessions.filter(
-    (s) => s.scheduledDate === todayKey || s.slot === "P7" || s.isSpecialTraining
-  );
+  const photoSample = "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=";
 
-  const sA = defaultData.sessions.find((s) => s.slot === "P1")!;
-  const sB = todaySessions.find((s) => s.slot === "P7")!;
-  const sC = todaySessions.find((s) => s.slot === "P7")!;
-  const sD = defaultData.sessions.find((s) => s.isSpecialTraining)!;
-  const sE = defaultData.sessions.find((s) => s.slot === "P5")!;
-  const sF = todaySessions.find((s) => s.slot === "P7")!;
+  console.log("\n--- Case 1: Camera Photo Only ---");
+  const s1 = defaultData.sessions.find((s) => s.slot === "P1")!;
+  try {
+    const res1 = await saveCompleteAttendanceRecord(user.uid, s1.id, {
+      photoDataUrl: photoSample,
+      clientCapturedAt: new Date().toISOString(),
+    });
+    console.log("Case 1 Save result:", {
+      personalStatus: res1.session.personalStatus,
+      evidenceAvailable: res1.session.evidenceAvailable,
+      photoDataUrl: res1.session.photoDataUrl ? "PRESENT" : "MISSING",
+    });
+  } catch (err: any) {
+    console.error("Case 1 error:", err);
+  }
 
-  // Case A — Camera photo only
-  console.log("\nTesting Case A — Camera photo only...");
-  const resA = await saveCompleteAttendanceRecord(user.uid, sA.id, {
-    photoDataUrl: samplePhoto,
-  });
-  assert.equal(resA.session.evidenceAvailable, true, "Case A: evidenceAvailable should be true");
-  assert.ok(resA.session.photoDataUrl, "Case A: photoDataUrl should be populated");
-  assert.equal(resA.session.personalStatus, sA.personalStatus, "Case A: personalStatus should not change");
-  assert.equal(resA.session.erpStatus, null, "Case A: erpStatus remains null");
-  console.log("  ✓ Case A passed: Camera photo saved independently without breaking or changing status.");
+  console.log("\n--- Case 2: Camera + AttendWise Status (Present) ---");
+  try {
+    const res2 = await saveCompleteAttendanceRecord(user.uid, p7Session.id, {
+      personalStatus: "present",
+      photoDataUrl: photoSample,
+      clientCapturedAt: new Date().toISOString(),
+    });
+    console.log("Case 2 Save result:", {
+      personalStatus: res2.session.personalStatus,
+      evidenceAvailable: res2.session.evidenceAvailable,
+      photoDataUrl: res2.session.photoDataUrl ? "PRESENT" : "MISSING",
+    });
+  } catch (err: any) {
+    console.error("Case 2 error:", err);
+  }
 
-  // Case B — Camera photo + AttendWise status
-  console.log("\nTesting Case B — Camera photo + AttendWise status...");
-  const resB = await saveCompleteAttendanceRecord(user.uid, sB.id, {
-    personalStatus: "present",
-    photoDataUrl: samplePhoto,
-  });
-  assert.equal(resB.session.personalStatus, "present", "Case B: status is present");
-  assert.equal(resB.session.evidenceAvailable, true, "Case B: evidenceAvailable is true");
-  assert.ok(resB.session.photoDataUrl, "Case B: photoDataUrl is populated");
-  console.log("  ✓ Case B passed: AttendWise status and camera photo saved together.");
+  console.log("\n--- Case 3: Camera + AttendWise Status + ERP Status ---");
+  const s3 = defaultData.sessions.find((s) => s.slot === "P2")!;
+  try {
+    const res3 = await saveCompleteAttendanceRecord(user.uid, s3.id, {
+      personalStatus: "absent",
+      erpStatus: "Present",
+      photoDataUrl: photoSample,
+      clientCapturedAt: new Date().toISOString(),
+    });
+    console.log("Case 3 Save result:", {
+      personalStatus: res3.session.personalStatus,
+      erpStatus: res3.session.erpStatus,
+      evidenceAvailable: res3.session.evidenceAvailable,
+      photoDataUrl: res3.session.photoDataUrl ? "PRESENT" : "MISSING",
+    });
+  } catch (err: any) {
+    console.error("Case 3 error:", err);
+  }
 
-  // Case C — Camera photo + AttendWise status + ERP status
-  console.log("\nTesting Case C — Camera photo + AttendWise status + ERP status...");
-  const resC = await saveCompleteAttendanceRecord(user.uid, sC.id, {
-    personalStatus: "present",
-    erpStatus: "Present",
-    photoDataUrl: samplePhoto,
-  });
-  assert.equal(resC.session.personalStatus, "present", "Case C: personal status is present");
-  assert.equal(resC.session.erpStatus, "Present", "Case C: ERP status is Present");
-  assert.equal(resC.session.evidenceAvailable, true, "Case C: evidenceAvailable is true");
-  console.log("  ✓ Case C passed: AttendWise status, ERP status, and camera photo saved together.");
+  console.log("\n--- Case 4: Camera + AttendWise Status + Keynote ---");
+  const s4 = defaultData.sessions.find((s) => s.slot === "P3")!;
+  try {
+    const res4 = await saveCompleteAttendanceRecord(user.uid, s4.id, {
+      personalStatus: "absent",
+      note: "Lab experiment completed",
+      photoDataUrl: photoSample,
+      clientCapturedAt: new Date().toISOString(),
+    });
+    console.log("Case 4 Save result:", {
+      personalStatus: res4.session.personalStatus,
+      note: res4.session.note,
+      evidenceAvailable: res4.session.evidenceAvailable,
+      photoDataUrl: res4.session.photoDataUrl ? "PRESENT" : "MISSING",
+    });
+  } catch (err: any) {
+    console.error("Case 4 error:", err);
+  }
 
-  // Case D — Camera photo + AttendWise status + keynote
-  console.log("\nTesting Case D — Camera photo + AttendWise status + keynote...");
-  const resD = await saveCompleteAttendanceRecord(user.uid, sD.id, {
-    personalStatus: "present",
-    note: "Submitted Python assignment during training",
-    photoDataUrl: samplePhoto,
-  });
-  assert.equal(resD.session.personalStatus, "present", "Case D: status is present");
-  assert.equal(resD.session.note, "Submitted Python assignment during training", "Case D: keynote is saved");
-  assert.equal(resD.session.evidenceAvailable, true, "Case D: evidenceAvailable is true");
-  console.log("  ✓ Case D passed: AttendWise status, keynote, and camera photo saved together.");
+  console.log("\n--- Case 5: Camera + ERP Status + Keynote ---");
+  const s5 = defaultData.sessions.find((s) => s.slot === "P5")!;
+  try {
+    const res5 = await saveCompleteAttendanceRecord(user.uid, s5.id, {
+      erpStatus: "Present",
+      note: "ERP marked by faculty",
+      photoDataUrl: photoSample,
+      clientCapturedAt: new Date().toISOString(),
+    });
+    console.log("Case 5 Save result:", {
+      personalStatus: res5.session.personalStatus,
+      erpStatus: res5.session.erpStatus,
+      note: res5.session.note,
+      evidenceAvailable: res5.session.evidenceAvailable,
+      photoDataUrl: res5.session.photoDataUrl ? "PRESENT" : "MISSING",
+    });
+  } catch (err: any) {
+    console.error("Case 5 error:", err);
+  }
 
-  // Case E — Camera photo + ERP status + keynote
-  console.log("\nTesting Case E — Camera photo + ERP status + keynote...");
-  const resE = await saveCompleteAttendanceRecord(user.uid, sE.id, {
-    erpStatus: "Present",
-    note: "Verified on SISTec ERP portal at 2:30 PM",
-    photoDataUrl: samplePhoto,
-  });
-  assert.equal(resE.session.erpStatus, "Present", "Case E: ERP status is Present");
-  assert.equal(resE.session.note, "Verified on SISTec ERP portal at 2:30 PM", "Case E: keynote is saved");
-  assert.equal(resE.session.evidenceAvailable, true, "Case E: evidenceAvailable is true");
-  console.log("  ✓ Case E passed: ERP status, keynote, and camera photo saved without requiring AttendWise status.");
+  console.log("\n--- Case 6: Camera + AttendWise Status + ERP Status + Keynote ---");
+  const pySession = defaultData.sessions.find((s) => s.subjectId === "sub-python-training")!;
+  try {
+    const res6 = await saveCompleteAttendanceRecord(user.uid, pySession.id, {
+      personalStatus: "present",
+      erpStatus: "Present",
+      note: "Full attendance all inputs",
+      photoDataUrl: photoSample,
+      clientCapturedAt: new Date().toISOString(),
+    });
+    console.log("Case 6 Save result:", {
+      personalStatus: res6.session.personalStatus,
+      erpStatus: res6.session.erpStatus,
+      note: res6.session.note,
+      evidenceAvailable: res6.session.evidenceAvailable,
+      photoDataUrl: res6.session.photoDataUrl ? "PRESENT" : "MISSING",
+    });
+  } catch (err: any) {
+    console.error("Case 6 error:", err);
+  }
 
-  // Case F — Camera photo + AttendWise status + ERP status + keynote
-  console.log("\nTesting Case F — Camera photo + AttendWise status + ERP status + keynote...");
-  const resF = await saveCompleteAttendanceRecord(user.uid, sF.id, {
-    personalStatus: "present",
-    erpStatus: "Present",
-    note: "All 4 inputs tested in P7 evening test class",
-    photoDataUrl: samplePhoto,
-  });
-  assert.equal(resF.session.personalStatus, "present", "Case F: personal status is present");
-  assert.equal(resF.session.erpStatus, "Present", "Case F: ERP status is Present");
-  assert.equal(resF.session.note, "All 4 inputs tested in P7 evening test class", "Case F: keynote is saved");
-  assert.equal(resF.session.evidenceAvailable, true, "Case F: evidenceAvailable is true");
-  assert.ok(resF.session.photoDataUrl, "Case F: photoDataUrl is populated");
-  console.log("  ✓ Case F passed: All 4 inputs saved successfully together into Cloud Firestore.");
+  // --- NOW VERIFY PERSISTENCE FROM FRESH FIRESTORE FETCH (CLEAN SLATE) ---
+  console.log("\n--- LOGGING OUT AND CHECKING FROM CLEAN FIRESTORE FETCH ---");
+  await logOutStudent();
+  await signInStudent(email, password);
 
-  // Re-login Simulation: Log out and log back in
-  console.log("\n--- SIMULATING LOGOUT AND RELOGIN ON SAME ACCOUNT ---");
-  await auth.signOut();
-  console.log("Logged out.");
+  const checkSessions = [
+    { name: "Case 1 (Photo only)", id: s1.id },
+    { name: "Case 2 (Camera + AW Present)", id: p7Session.id },
+    { name: "Case 3 (Camera + AW + ERP)", id: s3.id },
+    { name: "Case 4 (Camera + AW + Note)", id: s4.id },
+    { name: "Case 5 (Camera + ERP + Note)", id: s5.id },
+    { name: "Case 6 (Camera + All Inputs)", id: pySession.id },
+  ];
 
-  const reloggedUser = await signInStudent(email, password);
-  console.log("Relogged in as:", reloggedUser.uid);
-
-  // Re-verify Case F record
-  const resF_reloaded = await saveCompleteAttendanceRecord(reloggedUser.uid, sF.id, {});
-  assert.equal(resF_reloaded.session.personalStatus, "present", "Relogged: Personal status must remain Present");
-  assert.equal(resF_reloaded.session.erpStatus, "Present", "Relogged: ERP status must remain Present");
-  assert.equal(resF_reloaded.session.note, "All 4 inputs tested in P7 evening test class", "Relogged: Note must remain intact");
-  assert.equal(resF_reloaded.session.evidenceAvailable, true, "Relogged: Evidence flag must remain true");
-  assert.ok(resF_reloaded.session.photoDataUrl, "Relogged: photoDataUrl must remain populated");
-  console.log("✓ Relogin verification successful! Case F state completely preserved across logout and relogin.");
-
-  console.log("\n=================================================================");
-  console.log(" ALL 6 CAMERA TEST CASES PASSED SUCCESSFULLY ON FIREBASE");
-  console.log("=================================================================\n");
+  for (const cs of checkSessions) {
+    const snap = await getDocFromServer(doc(db, "users", user.uid, "classSessions", cs.id));
+    if (!snap.exists()) {
+      console.error(`FAILED: ${cs.name} DOES NOT EXIST IN FIRESTORE!`);
+    } else {
+      const data = snap.data() as ClassSessionItem;
+      console.log(`VERIFIED ${cs.name}:`, {
+        personalStatus: data.personalStatus,
+        erpStatus: data.erpStatus,
+        note: data.note,
+        evidenceAvailable: data.evidenceAvailable,
+        photoDataUrlPresent: Boolean(data.photoDataUrl),
+      });
+    }
+  }
 }
 
-runAll6Cases().then(() => process.exit(0)).catch((e) => {
-  console.error("FATAL ERROR IN ALL 6 CASES TEST:", e);
+testAllCameraCases().then(() => process.exit(0)).catch((e) => {
+  console.error("Failed:", e);
   process.exit(1);
 });

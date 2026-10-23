@@ -53,6 +53,7 @@ import { Skeleton } from "@workspace/attendwise-design-system/components/ui/skel
 import { Separator } from "@workspace/attendwise-design-system/components/ui/separator";
 import {
   computeFullAnalytics,
+  isSessionFrozen,
   type FullAnalyticsSummary,
   type SessionLike,
   type SubjectAnalyticsItem,
@@ -73,7 +74,7 @@ interface AnalyticsPageProps {
   subjects: SubjectItem[];
   isLoading?: boolean;
   onRecordErp?: (sessionId: string, status: "Present" | "Absent") => Promise<void>;
-  onFreezeClass?: (sessionId: string) => Promise<void>;
+  onFreezeClass?: (sessionId: string, reason?: string) => Promise<void>;
   onUnfreezeClass?: (sessionId: string) => Promise<void>;
 }
 
@@ -169,9 +170,9 @@ export default function AnalyticsPage({
     );
   }, [analytics.eligibleSessions]);
 
-  // Frozen sessions
+  // Frozen sessions (authoritative helper accounts for personalStatus='frozen', isFrozen=true, or frozenAt)
   const frozenSessions = useMemo(() => {
-    return sessions.filter((s) => s.personalStatus === "frozen");
+    return sessions.filter((s) => isSessionFrozen(s));
   }, [sessions]);
 
   const handleRecordErpDirect = async (sessionId: string, status: "Present" | "Absent") => {
@@ -193,7 +194,7 @@ export default function AnalyticsPage({
     setActionBusy(true);
     setActionFeedback(null);
     try {
-      if (session.personalStatus === "frozen") {
+      if (isSessionFrozen(session)) {
         if (onUnfreezeClass) {
           await onUnfreezeClass(session.id);
           setActionFeedback("Class unfrozen and restored to attendance calculations.");
@@ -1087,6 +1088,11 @@ export default function AnalyticsPage({
                   <span className="text-[10px] text-sky-700 dark:text-sky-300 mt-0.5 block">
                     Frozen at: {formatClock(session.frozenAt || session.finalizedAt)}
                   </span>
+                  {session.freezeReason ? (
+                    <span className="text-[10px] text-muted-foreground mt-0.5 block italic">
+                      Reason: {session.freezeReason}
+                    </span>
+                  ) : null}
                 </div>
                 <Button
                   size="sm"

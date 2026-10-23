@@ -14,13 +14,24 @@ export interface SessionLike {
   erpStatus?: "Present" | "Absent" | null;
   finalized: boolean;
   finalizedAt?: string | null;
+  isFrozen?: boolean;
   frozenAt?: string | null;
+  freezeReason?: string | null;
   cancelledAt?: string | null;
   slot?: string;
   room?: string | null;
   note?: string | null;
   previousPersonalStatus?: string | null;
   previousErpStatus?: string | null;
+}
+
+export function isSessionFrozen(session: SessionLike | any | null | undefined): boolean {
+  if (!session) return false;
+  return Boolean(
+    session.personalStatus === "frozen" ||
+    session.isFrozen === true ||
+    session.frozenAt
+  );
 }
 
 export interface MetricResult {
@@ -134,7 +145,7 @@ export interface FullAnalyticsSummary {
 export function isSessionEligible(session: SessionLike, nowMs: number = Date.now()): boolean {
   // 1. Python Training historical sessions are permanently capped at 66 completed sessions
   if (session.subjectId === "sub-python-training" || (session as any).isSpecialTraining) {
-    if (session.personalStatus === "frozen" || session.personalStatus === "cancelled") {
+    if (isSessionFrozen(session) || session.personalStatus === "cancelled") {
       return false;
     }
     return true;
@@ -146,7 +157,7 @@ export function isSessionEligible(session: SessionLike, nowMs: number = Date.now
   }
 
   // 3. Frozen classes are strictly excluded from calculations & denominators
-  if (session.personalStatus === "frozen") {
+  if (isSessionFrozen(session)) {
     return false;
   }
 
@@ -319,7 +330,7 @@ export function computeFullAnalytics(
   };
 
   // 4. Excluded and upcoming informational counts
-  const frozenCount = allSessions.filter((s) => s.personalStatus === "frozen").length;
+  const frozenCount = allSessions.filter((s) => isSessionFrozen(s)).length;
   const cancelledCount = allSessions.filter((s) => s.personalStatus === "cancelled").length;
   const upcomingCount = allSessions.filter(
     (s) =>

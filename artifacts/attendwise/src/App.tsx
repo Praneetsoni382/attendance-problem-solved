@@ -77,6 +77,7 @@ import {
   TIMEZONE,
   handleFirestoreError,
   OperationType,
+  isSessionFrozen,
   storage,
   resolveSessionEvidenceUrl,
   type StudentProfile,
@@ -331,14 +332,14 @@ const asPct = (value: number | null | undefined) =>
   value === null || value === undefined ? "N/A" : `${Math.round(value)}%`;
 
 const isSessionInWindow = (session: ClassSessionItem, nowMs: number = Date.now()) => {
-  if (session.finalized || session.personalStatus === "cancelled" || session.personalStatus === "frozen") return false;
+  if (session.finalized || session.personalStatus === "cancelled" || isSessionFrozen(session)) return false;
   const startMs = new Date(session.scheduledStartAt).getTime();
   const endMs = new Date(session.scheduledEndAt).getTime();
   return !isNaN(startMs) && !isNaN(endMs) && nowMs >= startMs && nowMs < endMs;
 };
 
 const sessionStatusLabel = (session: ClassSessionItem, nowMs: number = Date.now()) => {
-  if (session.personalStatus === "frozen") return "Class Frozen (Excluded)";
+  if (isSessionFrozen(session)) return "Class Frozen (Excluded)";
   if (session.personalStatus === "cancelled") return "Cancelled";
   if (session.personalStatus === "present") return "Present";
   if (session.personalStatus === "absent") {
@@ -1157,7 +1158,7 @@ function AttendanceCardDialog({
   onRecordErp?: (sessionId: string, status: "Present" | "Absent") => Promise<void>;
   onMarkPresent?: (sessionId: string, photoUrl?: string, note?: string, capturedAt?: string) => Promise<void>;
   onMarkAbsent?: (sessionId: string, note?: string) => Promise<void>;
-  onFreezeClass?: (sessionId: string) => Promise<void>;
+  onFreezeClass?: (sessionId: string, reason?: string) => Promise<void>;
   onSaveCompleteAttendance?: (sessionId: string, payload: CompleteAttendancePayload) => Promise<void>;
 }) {
   // Always derive the most authoritative, live session state from the parent sessions listener
@@ -1171,10 +1172,12 @@ function AttendanceCardDialog({
   const [events, setEvents] = useState<AttendanceEventItem[]>([]);
   const [secondsRemaining, setSecondsRemaining] = useState<number | null>(null);
   const [noteInput, setNoteInput] = useState(session?.note || "");
+  const [freezeReasonInput, setFreezeReasonInput] = useState(session?.freezeReason || "");
   const [evidencePhotoUrl, setEvidencePhotoUrl] = useState<string | null>(null);
   const [confirmFreeze, setConfirmFreeze] = useState(false);
   const [capturedPhotoUrl, setCapturedPhotoUrl] = useState<string | null>(null);
   const [capturedPhotoAt, setCapturedPhotoAt] = useState<string | null>(null);
+  const prevSessionIdRef = useRef<string | null>(null);
   
   const { 
     videoRef, 
@@ -1244,23 +1247,30 @@ function AttendanceCardDialog({
 
   useEffect(() => {
     if (!open) {
+      prevSessionIdRef.current = null;
       setCapturedPhotoUrl(null);
       setCapturedPhotoAt(null);
+      setStagedPersonalStatus(null);
+      setStagedErpStatus(null);
+      setStagedNote("");
+      setFreezeReasonInput("");
+      setConfirmFreeze(false);
       stopCamera();
+      return;
     }
-  }, [open]);
 
-  useEffect(() => {
-    if (session) {
-      setCapturedPhotoUrl(null);
-      setCapturedPhotoAt(null);
+    if (session && session.id !== prevSessionIdRef.current) {
+      prevSessionIdRef.current = session.id;
+      setCapturedPhotoUrl(session.photoDataUrl || null);
+      setCapturedPhotoAt(session.clientCaptureAt || null);
       setStagedPersonalStatus(session.personalStatus);
       setStagedErpStatus(session.erpStatus);
       setStagedNote(session.note || "");
       setNoteInput(session.note || "");
+      setFreezeReasonInput(session.freezeReason || "");
       setConfirmFreeze(false);
     }
-  }, [session?.id, session?.personalStatus, session?.erpStatus, session?.note]);
+  }, [open, session?.id, stopCamera]);
 
   const todayKey = formatDateKey(new Date());
   const nowMs = Date.now();
@@ -1269,7 +1279,7 @@ function AttendanceCardDialog({
   const isP7 = session?.slot === "P7" || session?.subjectCode === "TEST-P7" || session?.subjectId === "sub-test-class-p7";
   const isToday = session?.scheduledDate === todayKey || (isP7 && nowMs >= startMs && nowMs < endMs);
 
-  const isFrozen = stagedPersonalStatus === "frozen" || session?.personalStatus === "frozen";
+  const isFrozen = stagedPersonalStatus === "frozen" || isSessionFrozen(session);
   const isPresentAlready = session?.personalStatus === "present";
   const isHistoricalTraining = Boolean(session?.isSpecialTraining || session?.subjectId === PYTHON_TRAINING_SUBJECT.id);
   const inWindow = Boolean(
@@ -1854,11 +1864,23 @@ function AttendanceCardDialog({
 
           {/* Freeze Class Option */}
           {isFrozen ? (
-            <div className="rounded-xl border p-4 bg-sky-500/10 border-sky-500/20 text-sky-900 dark:text-sky-200 text-xs font-semibold text-center flex items-center justify-center gap-2">
-              <Snowflake className="h-4 w-4 text-sky-600 dark:text-sky-400" /> Class Is Freezed (Permanently Cancelled & Excluded)
+            <div className="rounded-xl border p-4 bg-sky-500/10 border-sky-500/20 text-sky-900 dark:text-sky-200 text-xs space-y-1 text-center">
+              <div className="flex items-center justify-center gap-2 font-semibold">
+                <Snowflake className="h-4 w-4 text-sky-600 dark:text-sky-400" /> Class Is Frozen (Permanently Excluded)
+              </div>
+              {session.freezeReason ? (
+                <p className="text-[11px] text-sky-800 dark:text-sky-300 italic">
+                  Reason: &quot;{session.freezeReason}&quot;
+                </p>
+              ) : null}
+              {session.frozenAt ? (
+                <p className="text-[10px] text-muted-foreground">
+                  Frozen on {formatDate(session.frozenAt.slice(0, 10))} at {formatClock(session.frozenAt)} IST
+                </p>
+              ) : null}
             </div>
           ) : (
-            <div className="rounded-xl border p-4 bg-rose-50/50 border-rose-100 dark:bg-rose-950/20 dark:border-rose-900/50 space-y-2">
+            <div className="rounded-xl border p-4 bg-rose-50/50 border-rose-100 dark:bg-rose-950/20 dark:border-rose-900/50 space-y-2.5">
               <div className="flex items-center justify-between">
                 <h4 className="text-xs font-semibold text-rose-800 dark:text-rose-300 flex items-center gap-1.5">
                   <Snowflake className="h-4 w-4 text-rose-600" /> Freeze Class (Cancel & Exclude)
@@ -1877,8 +1899,15 @@ function AttendanceCardDialog({
                     <AlertTriangle className="h-4 w-4 text-rose-600" /> Confirm Permanent Class Freeze?
                   </p>
                   <p className="text-[11px] text-rose-800 dark:text-rose-300">
-                    This class will be permanently removed from all calculations. This action is irreversible and one-time final.
+                    This class will be permanently removed from all calculations, regardless of prior attendance or ERP records.
                   </p>
+                  <Input
+                    value={freezeReasonInput}
+                    onChange={(e) => setFreezeReasonInput(e.target.value)}
+                    placeholder="Reason for freezing (e.g. Faculty on leave, College event, Medical)"
+                    className="text-xs h-8 bg-background"
+                    disabled={busy}
+                  />
                   <div className="flex gap-2 pt-1">
                     <Button
                       size="sm"
@@ -1890,10 +1919,11 @@ function AttendanceCardDialog({
                         setError(null);
                         try {
                           setStagedPersonalStatus("frozen");
+                          const reasonToSave = freezeReasonInput.trim() || undefined;
                           if (onFreezeClass) {
-                            await onFreezeClass(session.id);
+                            await onFreezeClass(session.id, reasonToSave);
                           } else {
-                            await freezeClassSession(user.uid, session.id);
+                            await freezeClassSession(user.uid, session.id, reasonToSave);
                           }
                           setNotice("Class successfully frozen and permanently removed from all calculations.");
                           setConfirmFreeze(false);
@@ -2037,7 +2067,7 @@ function Dashboard({
   onRecordErp?: (sessionId: string, status: "Present" | "Absent") => Promise<void>;
   onMarkPresent?: (sessionId: string, photoUrl?: string, note?: string, capturedAt?: string) => Promise<void>;
   onMarkAbsent?: (sessionId: string, note?: string) => Promise<void>;
-  onFreezeClass?: (sessionId: string) => Promise<void>;
+  onFreezeClass?: (sessionId: string, reason?: string) => Promise<void>;
   onSaveCompleteAttendance?: (sessionId: string, payload: CompleteAttendancePayload) => Promise<void>;
 }) {
   const [selectedCardSession, setSelectedCardSession] = useState<ClassSessionItem | null>(null);
@@ -3035,7 +3065,7 @@ function AttendanceHistory({
   onRecordErp?: (sessionId: string, status: "Present" | "Absent") => Promise<void>;
   onMarkPresent?: (sessionId: string, photoUrl?: string, note?: string, capturedAt?: string) => Promise<void>;
   onMarkAbsent?: (sessionId: string, note?: string) => Promise<void>;
-  onFreezeClass?: (sessionId: string) => Promise<void>;
+  onFreezeClass?: (sessionId: string, reason?: string) => Promise<void>;
   onSaveCompleteAttendance?: (sessionId: string, payload: CompleteAttendancePayload) => Promise<void>;
 }) {
   const [selectedSession, setSelectedSession] = useState<ClassSessionItem | null>(null);
@@ -3643,18 +3673,18 @@ function Comparison({
   user: FirebaseUser;
   sessions: ClassSessionItem[];
   onRecordErp?: (sessionId: string, status: "Present" | "Absent") => Promise<void>;
-  onFreezeClass?: (sessionId: string) => Promise<void>;
+  onFreezeClass?: (sessionId: string, reason?: string) => Promise<void>;
 }) {
   const [selectedSession, setSelectedSession] = useState<ClassSessionItem | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
 
   const stats = useMemo(() => computeAttendanceStats(sessions), [sessions]);
 
-  // Eligible finalized sessions
+  // Eligible finalized sessions (strictly excluding all frozen sessions)
   const eligibleSessions = useMemo(
     () =>
       sessions
-        .filter((s) => s.finalized && (s.personalStatus === "present" || s.personalStatus === "absent"))
+        .filter((s) => s.finalized && !isSessionFrozen(s) && (s.personalStatus === "present" || s.personalStatus === "absent"))
         .sort((a, b) => new Date(b.scheduledStartAt).getTime() - new Date(a.scheduledStartAt).getTime()),
     [sessions]
   );
@@ -4865,7 +4895,7 @@ export default function App() {
 
     setSubjects(defaultData.subjects);
     setTimetable(defaultData.timetable);
-    setSessions(defaultData.sessions);
+    setSessions(initialSessions);
 
     setProfile({
       id: user.uid,
@@ -5248,17 +5278,22 @@ export default function App() {
     }
   };
 
-  const handleFreezeClassQuick = async (sessionId: string) => {
+  const handleFreezeClassQuick = async (sessionId: string, reason?: string) => {
     const nowIso = new Date().toISOString();
+    const cleanReason = reason?.trim() || null;
+    const currentS = sessions.find((s) => s.id === sessionId);
+    const targetStatus = currentS?.personalStatus === "present" ? ("present" as const) : ("frozen" as const);
     setSessions((prev) => {
       const updated = prev.map((s) =>
         s.id === sessionId
           ? {
               ...s,
-              personalStatus: "frozen" as const,
-              finalized: true,
+              isFrozen: true,
               frozenAt: nowIso,
+              freezeReason: cleanReason,
+              finalized: true,
               finalizedAt: nowIso,
+              personalStatus: s.personalStatus === "present" ? ("present" as const) : ("frozen" as const),
               previousPersonalStatus: s.personalStatus !== "frozen" ? s.personalStatus : "absent",
               previousErpStatus: s.erpStatus ?? null,
             }
@@ -5267,30 +5302,34 @@ export default function App() {
       void setCachedStore("sessions", updated).catch(() => {});
       return updated;
     });
-    const currentS = sessions.find((s) => s.id === sessionId);
     persistLocalSessionOverride(sessionId, {
-      personalStatus: "frozen",
-      finalized: true,
+      isFrozen: true,
       frozenAt: nowIso,
+      freezeReason: cleanReason,
+      personalStatus: targetStatus,
+      finalized: true,
       finalizedAt: nowIso,
       previousPersonalStatus: currentS && currentS.personalStatus !== "frozen" ? currentS.personalStatus : "absent",
       previousErpStatus: currentS?.erpStatus ?? null,
     });
     if (user) {
-      await freezeClassSession(user.uid, sessionId);
+      await freezeClassSession(user.uid, sessionId, cleanReason || undefined);
     }
   };
 
   const handleUnfreezeClassQuick = async (sessionId: string) => {
+    const currentS = sessions.find((s) => s.id === sessionId);
+    const restoredStatus =
+      (currentS as any)?.previousPersonalStatus === "present" ? "present" : "absent";
     setSessions((prev) => {
       const updated = prev.map((s) => {
         if (s.id !== sessionId) return s;
-        const restoredStatus =
-          (s as any).previousPersonalStatus === "present" ? "present" : "absent";
         return {
           ...s,
-          personalStatus: restoredStatus as const,
+          isFrozen: false,
           frozenAt: null,
+          freezeReason: null,
+          personalStatus: restoredStatus as const,
           finalized: true,
         };
       });
@@ -5298,8 +5337,10 @@ export default function App() {
       return updated;
     });
     persistLocalSessionOverride(sessionId, {
-      personalStatus: "absent",
+      isFrozen: false,
       frozenAt: null,
+      freezeReason: null,
+      personalStatus: restoredStatus,
       finalized: true,
     });
     if (user) {
