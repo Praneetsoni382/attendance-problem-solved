@@ -1228,17 +1228,43 @@ function AttendanceCardDialog({
   const snapPhoto = () => {
     if (!videoRef.current) return;
     const canvas = document.createElement("canvas");
-    canvas.width = Math.min(videoRef.current.videoWidth || 320, 320);
-    canvas.height = Math.min(videoRef.current.videoHeight || 240, 240);
+    canvas.width = 240;
+    canvas.height = 180;
     const ctx = canvas.getContext("2d");
     if (ctx) {
-      ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
-      const dataUrl = canvas.toDataURL("image/jpeg", 0.5);
+      ctx.drawImage(videoRef.current, 0, 0, 240, 180);
+      const dataUrl = canvas.toDataURL("image/jpeg", 0.35);
       const captureInstant = new Date().toISOString();
       setCapturedPhotoUrl(dataUrl);
       setCapturedPhotoAt(captureInstant);
     }
     stopCamera();
+  };
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      const srcData = evt.target?.result as string;
+      if (!srcData) return;
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement("canvas");
+        canvas.width = 240;
+        canvas.height = 180;
+        const ctx = canvas.getContext("2d");
+        if (ctx) {
+          ctx.drawImage(img, 0, 0, 240, 180);
+          const dataUrl = canvas.toDataURL("image/jpeg", 0.35);
+          const captureInstant = new Date().toISOString();
+          setCapturedPhotoUrl(dataUrl);
+          setCapturedPhotoAt(captureInstant);
+        }
+      };
+      img.src = srcData;
+    };
+    reader.readAsDataURL(file);
   };
 
   const [stagedPersonalStatus, setStagedPersonalStatus] = useState<string | null>(null);
@@ -1669,15 +1695,27 @@ function AttendanceCardDialog({
                       {cameraError && (
                         <p className="text-xs text-rose-600 bg-rose-50 p-2 rounded">{cameraError}</p>
                       )}
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        onClick={startCamera}
-                        className="w-full text-xs"
-                      >
-                        <Camera className="h-3.5 w-3.5 mr-1.5" /> {cameraError ? "Retry Camera" : "Enable Live Camera (Optional)"}
-                      </Button>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={startCamera}
+                          className="w-full text-xs"
+                        >
+                          <Camera className="h-3.5 w-3.5 mr-1.5 text-primary" /> {cameraError ? "Retry Camera" : "Enable Live Camera"}
+                        </Button>
+                        <label className="cursor-pointer inline-flex items-center justify-center rounded-md border border-input bg-background px-3 py-1.5 text-xs font-medium shadow-xs hover:bg-accent hover:text-accent-foreground text-foreground">
+                          <Plus className="h-3.5 w-3.5 mr-1.5 text-primary" /> Attach Photo File
+                          <input
+                            type="file"
+                            accept="image/*"
+                            capture="environment"
+                            className="hidden"
+                            onChange={handleFileUpload}
+                          />
+                        </label>
+                      </div>
                     </div>
                   )}
                 </div>
@@ -4268,12 +4306,12 @@ function SessionDetail({
   const snapPhoto = () => {
     if (!videoRef.current) return;
     const canvas = document.createElement("canvas");
-    canvas.width = Math.min(videoRef.current.videoWidth || 320, 320);
-    canvas.height = Math.min(videoRef.current.videoHeight || 240, 240);
+    canvas.width = 240;
+    canvas.height = 180;
     const ctx = canvas.getContext("2d");
     if (ctx) {
-      ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
-      const dataUrl = canvas.toDataURL("image/jpeg", 0.5);
+      ctx.drawImage(videoRef.current, 0, 0, 240, 180);
+      const dataUrl = canvas.toDataURL("image/jpeg", 0.35);
       const captureInstant = new Date().toISOString();
       setCapturedPhotoUrl(dataUrl);
       setCapturedPhotoAt(captureInstant);
@@ -4284,6 +4322,32 @@ function SessionDetail({
       streamRef.current = null;
     }
     setCameraActive(false);
+  };
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      const srcData = evt.target?.result as string;
+      if (!srcData) return;
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement("canvas");
+        canvas.width = 240;
+        canvas.height = 180;
+        const ctx = canvas.getContext("2d");
+        if (ctx) {
+          ctx.drawImage(img, 0, 0, 240, 180);
+          const dataUrl = canvas.toDataURL("image/jpeg", 0.35);
+          const captureInstant = new Date().toISOString();
+          setCapturedPhotoUrl(dataUrl);
+          setCapturedPhotoAt(captureInstant);
+        }
+      };
+      img.src = srcData;
+    };
+    reader.readAsDataURL(file);
   };
 
   const handleMarkPresent = async () => {
@@ -4552,15 +4616,27 @@ function SessionDetail({
                         </Button>
                       </div>
                     ) : (
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        onClick={startCamera}
-                        className="w-full text-xs"
-                      >
-                        <Camera className="h-3.5 w-3.5 mr-1.5" /> Enable Live Camera (Optional)
-                      </Button>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={startCamera}
+                          className="w-full text-xs"
+                        >
+                          <Camera className="h-3.5 w-3.5 mr-1.5 text-primary" /> Enable Live Camera
+                        </Button>
+                        <label className="cursor-pointer inline-flex items-center justify-center rounded-md border border-input bg-background px-3 py-1.5 text-xs font-medium shadow-xs hover:bg-accent hover:text-accent-foreground text-foreground">
+                          <Plus className="h-3.5 w-3.5 mr-1.5 text-primary" /> Attach Photo File
+                          <input
+                            type="file"
+                            accept="image/*"
+                            capture="environment"
+                            className="hidden"
+                            onChange={handleFileUpload}
+                          />
+                        </label>
+                      </div>
                     )}
                   </div>
 

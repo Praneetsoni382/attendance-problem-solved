@@ -959,24 +959,24 @@ export {
   BTECH_3RD_TEACHING_DAYS,
 };
 
-// Utility to compress base64 images into lightweight thumbnails (<15KB-30KB) that fit safely inside Firestore & IndexedDB
-export function compressImageBase64(dataUrl: string, maxDimension = 240, quality = 0.4): Promise<string> {
+// Utility to compress base64 images into lightweight thumbnails (<15KB-25KB) that fit safely inside Firestore & IndexedDB
+export function compressImageBase64(dataUrl: string, maxDimension = 240, quality = 0.35): Promise<string> {
   return new Promise((resolve) => {
     if (!dataUrl || !dataUrl.startsWith("data:image")) {
-      return resolve(dataUrl ? truncateOrDownscaleBase64(dataUrl, 35000) : "");
+      return resolve(dataUrl || "");
     }
 
-    if (dataUrl.length <= 35000) {
+    if (dataUrl.length <= 28000) {
       return resolve(dataUrl);
     }
 
     if (typeof window === "undefined" || typeof document === "undefined" || typeof Image === "undefined") {
-      return resolve(truncateOrDownscaleBase64(dataUrl, 35000));
+      return resolve(dataUrl);
     }
 
-    // Safety timeout: Never let image compression hang indefinitely
+    // Safety timeout: resolve original or safe empty if loading exceeds 1.5s
     const timer = setTimeout(() => {
-      resolve(truncateOrDownscaleBase64(dataUrl, 35000));
+      resolve(dataUrl.length <= 35000 ? dataUrl : "");
     }, 1500);
 
     const img = new Image();
@@ -998,34 +998,41 @@ export function compressImageBase64(dataUrl: string, maxDimension = 240, quality
         canvas.width = Math.max(width, 1);
         canvas.height = Math.max(height, 1);
         const ctx = canvas.getContext("2d");
-        if (!ctx) return resolve(truncateOrDownscaleBase64(dataUrl, 35000));
+        if (!ctx) return resolve(dataUrl);
         ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
         let compressed = canvas.toDataURL("image/jpeg", quality);
 
-        // If still over 35KB, downscale canvas further
-        if (compressed.length > 35000) {
+        // If still over 28KB, scale down canvas resolution further
+        if (compressed.length > 28000) {
           const canvasSmall = document.createElement("canvas");
           canvasSmall.width = 160;
           canvasSmall.height = Math.round((height * 160) / width) || 120;
           const ctxSmall = canvasSmall.getContext("2d");
           if (ctxSmall) {
             ctxSmall.drawImage(img, 0, 0, canvasSmall.width, canvasSmall.height);
-            compressed = canvasSmall.toDataURL("image/jpeg", 0.3);
+            compressed = canvasSmall.toDataURL("image/jpeg", 0.25);
           }
         }
 
         if (compressed.length > 35000) {
-          compressed = truncateOrDownscaleBase64(compressed, 35000);
+          const canvasTiny = document.createElement("canvas");
+          canvasTiny.width = 120;
+          canvasTiny.height = Math.round((height * 120) / width) || 90;
+          const ctxTiny = canvasTiny.getContext("2d");
+          if (ctxTiny) {
+            ctxTiny.drawImage(img, 0, 0, canvasTiny.width, canvasTiny.height);
+            compressed = canvasTiny.toDataURL("image/jpeg", 0.2);
+          }
         }
 
         resolve(compressed);
       } catch {
-        resolve(truncateOrDownscaleBase64(dataUrl, 35000));
+        resolve(dataUrl);
       }
     };
     img.onerror = () => {
       clearTimeout(timer);
-      resolve(truncateOrDownscaleBase64(dataUrl, 35000));
+      resolve(dataUrl);
     };
     img.src = dataUrl;
   });
@@ -1033,17 +1040,8 @@ export function compressImageBase64(dataUrl: string, maxDimension = 240, quality
 
 function truncateOrDownscaleBase64(dataUrl: string, maxBytes = 35000): string {
   if (!dataUrl) return "";
-  if (dataUrl.length <= maxBytes) return dataUrl;
-
-  const headerMatch = dataUrl.match(/^(data:image\/[a-zA-Z]+;base64,)/);
-  const header = headerMatch ? headerMatch[1] : "data:image/jpeg;base64,";
-  const rawBase64 = dataUrl.startsWith("data:") ? dataUrl.slice(header.length) : dataUrl;
-
-  const targetRawLen = Math.max(0, maxBytes - header.length);
-  const alignedLen = targetRawLen - (targetRawLen % 4);
-  const truncatedRaw = rawBase64.slice(0, alignedLen);
-
-  return `${header}${truncatedRaw}`;
+  // Never slice base64 image characters, as string slicing corrupts JPEG data
+  return dataUrl;
 }
 
 // Atomic Complete Attendance & Evidence Saver (Unified Cloud Firestore Transaction)
