@@ -1579,14 +1579,52 @@ export async function freezeClassSession(uid: string, sessionId: string): Promis
       const prevStatus = prevData?.personalStatus !== "frozen" ? prevData?.personalStatus : "absent";
       const prevErp = prevData?.erpStatus ?? null;
 
-      await updateDoc(sessionRef, {
-        personalStatus: "frozen",
-        finalized: true,
-        frozenAt: now,
-        finalizedAt: now,
-        previousPersonalStatus: prevStatus,
-        previousErpStatus: prevErp,
-      });
+      if (!sessionSnap.exists()) {
+        const defaultData = buildDefaultSistecData(uid);
+        const found = defaultData.sessions.find((s) => s.id === sessionId);
+        const baseSession = found || {
+          id: sessionId,
+          studentId: uid,
+          subjectId: "sub-unknown",
+          subjectName: "Subject",
+          subjectCode: "CODE",
+          timetableEntryId: null,
+          slot: "P1",
+          scheduledDate: formatDateKey(new Date()),
+          scheduledStartAt: now,
+          scheduledEndAt: now,
+          category: "Theory",
+          personalStatus: "unmarked",
+          erpStatus: null,
+          finalized: false,
+          createdAt: now,
+        };
+
+        await setDoc(sessionRef, {
+          ...baseSession,
+          personalStatus: "frozen",
+          finalized: true,
+          frozenAt: now,
+          finalizedAt: now,
+          previousPersonalStatus: prevStatus,
+          previousErpStatus: prevErp,
+          updatedAt: now,
+        });
+      } else {
+        await setDoc(
+          sessionRef,
+          {
+            personalStatus: "frozen",
+            finalized: true,
+            frozenAt: now,
+            finalizedAt: now,
+            previousPersonalStatus: prevStatus,
+            previousErpStatus: prevErp,
+            updatedAt: now,
+          },
+          { merge: true }
+        );
+      }
 
       const eventRef = doc(db, "users", uid, "attendanceEvents", `event-freeze-${sessionId}-${Date.now()}`);
       await setDoc(eventRef, {
@@ -1598,6 +1636,9 @@ export async function freezeClassSession(uid: string, sessionId: string): Promis
       });
     } catch (e) {
       console.warn("Firestore update error in freezeClassSession:", e);
+      if (auth.currentUser && auth.currentUser.uid === uid) {
+        handleFirestoreError(e, OperationType.WRITE, `users/${uid}/classSessions/${sessionId}`);
+      }
     }
   }
 
@@ -1641,12 +1682,17 @@ export async function unfreezeClassSession(uid: string, sessionId: string): Prom
           ? "present"
           : "absent";
 
-      await updateDoc(sessionRef, {
-        personalStatus: restoredStatus,
-        frozenAt: null,
-        finalized: true,
-        finalizedAt: sessionData?.finalizedAt || now,
-      });
+      await setDoc(
+        sessionRef,
+        {
+          personalStatus: restoredStatus,
+          frozenAt: null,
+          finalized: true,
+          finalizedAt: sessionData?.finalizedAt || now,
+          updatedAt: now,
+        },
+        { merge: true }
+      );
 
       const eventRef = doc(db, "users", uid, "attendanceEvents", `event-unfreeze-${sessionId}-${Date.now()}`);
       await setDoc(eventRef, {
@@ -1658,6 +1704,9 @@ export async function unfreezeClassSession(uid: string, sessionId: string): Prom
       });
     } catch (e) {
       console.warn("Firestore update error in unfreezeClassSession:", e);
+      if (auth.currentUser && auth.currentUser.uid === uid) {
+        handleFirestoreError(e, OperationType.WRITE, `users/${uid}/classSessions/${sessionId}`);
+      }
     }
   }
 
