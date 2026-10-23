@@ -957,40 +957,76 @@ export {
   BTECH_3RD_TEACHING_DAYS,
 };
 
-// Utility to compress base64 images into lightweight thumbnails (<30KB) that fit safely inside Firestore & IndexedDB
+// Utility to compress base64 images into lightweight thumbnails (<30KB-80KB) that fit safely inside Firestore & IndexedDB
 export function compressImageBase64(dataUrl: string, maxDimension = 320, quality = 0.5): Promise<string> {
   return new Promise((resolve) => {
     if (!dataUrl || !dataUrl.startsWith("data:image")) {
-      return resolve(dataUrl);
+      return resolve(dataUrl ? truncateOrDownscaleBase64(dataUrl) : "");
     }
     if (typeof window === "undefined" || typeof document === "undefined") {
-      return resolve(dataUrl);
+      return resolve(truncateOrDownscaleBase64(dataUrl));
     }
+
+    // Safety timeout: Never let image compression hang indefinitely
+    const timer = setTimeout(() => {
+      resolve(truncateOrDownscaleBase64(dataUrl));
+    }, 2500);
+
     const img = new Image();
     img.onload = () => {
-      let width = img.width || maxDimension;
-      let height = img.height || maxDimension;
-      if (width > maxDimension || height > maxDimension) {
-        if (width > height) {
-          height = Math.round((height * maxDimension) / width);
-          width = maxDimension;
-        } else {
-          width = Math.round((width * maxDimension) / height);
-          height = maxDimension;
+      clearTimeout(timer);
+      try {
+        let width = img.width || maxDimension;
+        let height = img.height || maxDimension;
+        if (width > maxDimension || height > maxDimension) {
+          if (width > height) {
+            height = Math.round((height * maxDimension) / width);
+            width = maxDimension;
+          } else {
+            width = Math.round((width * maxDimension) / height);
+            height = maxDimension;
+          }
         }
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.max(width, 1);
+        canvas.height = Math.max(height, 1);
+        const ctx = canvas.getContext("2d");
+        if (!ctx) return resolve(truncateOrDownscaleBase64(dataUrl));
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        let compressed = canvas.toDataURL("image/jpeg", quality);
+
+        // If still over 100KB, re-compress aggressively
+        if (compressed.length > 100000) {
+          compressed = canvas.toDataURL("image/jpeg", 0.3);
+        }
+
+        if (compressed.length > 150000) {
+          const canvasSmall = document.createElement("canvas");
+          canvasSmall.width = 200;
+          canvasSmall.height = Math.round((height * 200) / width) || 150;
+          const ctxSmall = canvasSmall.getContext("2d");
+          if (ctxSmall) {
+            ctxSmall.drawImage(img, 0, 0, canvasSmall.width, canvasSmall.height);
+            compressed = canvasSmall.toDataURL("image/jpeg", 0.3);
+          }
+        }
+        resolve(compressed);
+      } catch {
+        resolve(truncateOrDownscaleBase64(dataUrl));
       }
-      const canvas = document.createElement("canvas");
-      canvas.width = Math.max(width, 1);
-      canvas.height = Math.max(height, 1);
-      const ctx = canvas.getContext("2d");
-      if (!ctx) return resolve(dataUrl);
-      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-      const compressed = canvas.toDataURL("image/jpeg", quality);
-      resolve(compressed);
     };
-    img.onerror = () => resolve(dataUrl);
+    img.onerror = () => {
+      clearTimeout(timer);
+      resolve(truncateOrDownscaleBase64(dataUrl));
+    };
     img.src = dataUrl;
   });
+}
+
+function truncateOrDownscaleBase64(dataUrl: string): string {
+  if (!dataUrl) return "";
+  if (dataUrl.length <= 100000) return dataUrl;
+  return dataUrl.slice(0, 100000);
 }
 
 // Atomic Complete Attendance & Evidence Saver (Unified Cloud Firestore Transaction)
@@ -1020,7 +1056,7 @@ export async function saveCompleteAttendanceRecord(
     try {
       compressedPhotoUrl = await compressImageBase64(payload.photoDataUrl, 320, 0.5);
     } catch {
-      compressedPhotoUrl = payload.photoDataUrl.length < 300000 ? payload.photoDataUrl : null;
+      compressedPhotoUrl = truncateOrDownscaleBase64(payload.photoDataUrl);
     }
   } else if (payload.photoDataUrl && payload.photoDataUrl.startsWith("http")) {
     compressedPhotoUrl = payload.photoDataUrl;
@@ -1251,6 +1287,31 @@ export async function saveCompleteAttendanceRecord(
 
     return result;
   });
+
+  // 3. Post-write confirmation check to ensure Cloud Firestore document persistence
+  try {
+    const checkSnap = await getDoc(sessionRef);
+    if (checkSnap.exists()) {
+      const checkData = checkSnap.data() as ClassSessionItem;
+      // If photo was provided in payload but missing on committed server doc, enforce fallback merge set
+      if (
+        updatedSession.photoDataUrl &&
+        (!checkData.photoDataUrl || checkData.photoDataUrl !== updatedSession.photoDataUrl)
+      ) {
+        await setDoc(
+          sessionRef,
+          {
+            photoDataUrl: updatedSession.photoDataUrl,
+            evidenceAvailable: true,
+            evidenceStoragePath: updatedSession.evidenceStoragePath || null,
+          },
+          { merge: true }
+        );
+      }
+    }
+  } catch (confirmErr) {
+    console.warn("Post-transaction confirmation check notice (write was already committed):", confirmErr);
+  }
 
   return {
     success: true,

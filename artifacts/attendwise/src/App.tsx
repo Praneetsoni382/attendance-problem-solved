@@ -1243,7 +1243,17 @@ function AttendanceCardDialog({
   const [stagedNote, setStagedNote] = useState<string>("");
 
   useEffect(() => {
+    if (!open) {
+      setCapturedPhotoUrl(null);
+      setCapturedPhotoAt(null);
+      stopCamera();
+    }
+  }, [open]);
+
+  useEffect(() => {
     if (session) {
+      setCapturedPhotoUrl(null);
+      setCapturedPhotoAt(null);
       setStagedPersonalStatus(session.personalStatus);
       setStagedErpStatus(session.erpStatus);
       setStagedNote(session.note || "");
@@ -5257,11 +5267,14 @@ export default function App() {
       void setCachedStore("sessions", updated).catch(() => {});
       return updated;
     });
+    const currentS = sessions.find((s) => s.id === sessionId);
     persistLocalSessionOverride(sessionId, {
       personalStatus: "frozen",
       finalized: true,
       frozenAt: nowIso,
       finalizedAt: nowIso,
+      previousPersonalStatus: currentS && currentS.personalStatus !== "frozen" ? currentS.personalStatus : "absent",
+      previousErpStatus: currentS?.erpStatus ?? null,
     });
     if (user) {
       await freezeClassSession(user.uid, sessionId);
