@@ -43,7 +43,7 @@ console.log(`  • Regular P4 (13:20 - 14:15 IST): ${slotP4.subjectName} (${slot
 console.log(`  • Regular P5 (14:15 - 15:10 IST): ${slotP5.subjectName} (${slotP5.subjectCode})`);
 console.log(`  • Regular P6 (15:10 - 16:10 IST): ${slotP6.subjectName} (${slotP6.subjectCode})`);
 console.log(`  • Python Training: ${slotPython.subjectName} (${slotPython.trainingProgram})`);
-console.log(`  • Evening P7 (19:00 - 07:00 IST next day): ${slotP7.subjectName} (${slotP7.subjectCode})`);
+console.log(`  • All-day P7 (00:00 - 23:59 IST): ${slotP7.subjectName} (${slotP7.subjectCode})`);
 
 // 2. Simulate saving attendance on Device A for ALL different periods
 // Cloud Firestore collection: users/{studentUid}/classSessions/{sessionId}

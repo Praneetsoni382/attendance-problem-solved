@@ -1225,12 +1225,12 @@ function AttendanceCardDialog({
   const snapPhoto = () => {
     if (!videoRef.current) return;
     const canvas = document.createElement("canvas");
-    canvas.width = Math.min(videoRef.current.videoWidth || 480, 480);
-    canvas.height = Math.min(videoRef.current.videoHeight || 360, 360);
+    canvas.width = Math.min(videoRef.current.videoWidth || 320, 320);
+    canvas.height = Math.min(videoRef.current.videoHeight || 240, 240);
     const ctx = canvas.getContext("2d");
     if (ctx) {
       ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
-      const dataUrl = canvas.toDataURL("image/jpeg", 0.6);
+      const dataUrl = canvas.toDataURL("image/jpeg", 0.5);
       const captureInstant = new Date().toISOString();
       setCapturedPhotoUrl(dataUrl);
       setCapturedPhotoAt(captureInstant);
@@ -1355,8 +1355,22 @@ function AttendanceCardDialog({
     try {
       const finalNote = stagedNote.trim() || noteInput.trim() || undefined;
 
-      const targetPersonalStatus: "present" | "absent" =
-        stagedPersonalStatus === "absent" ? "absent" : "present";
+      // Determine target personal status:
+      // If student actively staged "present" and it wasn't already present, send "present".
+      // If student actively staged "absent" and it wasn't already absent, send "absent".
+      // If session was ALREADY "present", keep "present".
+      // If session was ALREADY "absent", keep "absent".
+      // If student did NOT select/stage personal attendance (e.g. only saving keynote or ERP), send undefined!
+      let targetPersonalStatus: "present" | "absent" | undefined = undefined;
+      if (stagedPersonalStatus === "present" && session.personalStatus !== "present") {
+        targetPersonalStatus = "present";
+      } else if (stagedPersonalStatus === "absent" && session.personalStatus !== "absent") {
+        targetPersonalStatus = "absent";
+      } else if (session.personalStatus === "present") {
+        targetPersonalStatus = "present";
+      } else if (session.personalStatus === "absent") {
+        targetPersonalStatus = "absent";
+      }
 
       const payload: CompleteAttendancePayload = {
         personalStatus: targetPersonalStatus,
@@ -1392,11 +1406,35 @@ function AttendanceCardDialog({
 
   const currentStatusLabel = isFrozen ? "Class Frozen (Excluded)" : sessionStatusLabel(session);
 
+  // Each of the 4 inputs can independently trigger unsaved changes:
+  // 1. Personal status (AttendWise) staged
+  // 2. ERP status staged
+  // 3. Note / keynote typed or staged
+  // 4. Photo captured
+  const hasPersonalStatusChange = Boolean(
+    stagedPersonalStatus &&
+    stagedPersonalStatus !== session.personalStatus &&
+    (!isPresentAlready || stagedPersonalStatus === "present") &&
+    (stagedPersonalStatus === "present" || stagedPersonalStatus === "absent")
+  );
+  const hasErpStatusChange = Boolean(
+    stagedErpStatus &&
+    stagedErpStatus !== session.erpStatus &&
+    session.erpStatus === null
+  );
+  const currentNoteVal = (stagedNote.trim() || noteInput.trim());
+  const hasNoteChange = Boolean(
+    currentNoteVal &&
+    currentNoteVal !== (session.note || "").trim() &&
+    !session.note
+  );
+  const hasPhotoChange = Boolean(
+    capturedPhotoUrl &&
+    capturedPhotoUrl !== session.photoDataUrl
+  );
+
   const hasUnsavedChanges = Boolean(
-    (!isPresentAlready && stagedPersonalStatus === "present") ||
-    (!session.finalized && stagedPersonalStatus === "absent" && session.personalStatus !== "absent") ||
-    (!session.erpStatus && stagedErpStatus) ||
-    (!session.note && (noteInput.trim() || stagedNote.trim()))
+    hasPersonalStatusChange || hasErpStatusChange || hasNoteChange || hasPhotoChange
   );
 
   return (
@@ -5008,15 +5046,26 @@ export default function App() {
     setSessions((prev) => {
       const updated = prev.map((s) => {
         if (s.id !== sessionId) return s;
+        const newPersonalStatus =
+          payload.personalStatus !== undefined && payload.personalStatus !== null
+            ? payload.personalStatus
+            : s.personalStatus;
+        const isStatusFinalized = Boolean(
+          s.finalized ||
+          newPersonalStatus === "present" ||
+          newPersonalStatus === "absent" ||
+          newPersonalStatus === "frozen" ||
+          newPersonalStatus === "cancelled"
+        );
         return {
           ...s,
-          personalStatus: payload.personalStatus,
-          absentType: payload.personalStatus === "absent" ? ("manual_student" as const) : null,
-          finalized: true,
-          finalizedAt: nowIso,
-          serverReceiptAt: payload.personalStatus === "present" ? nowIso : s.serverReceiptAt,
-          clientCaptureAt: payload.personalStatus === "present" ? (finalCapturedAt || s.clientCaptureAt) : s.clientCaptureAt,
-          photoDataUrl: payload.photoDataUrl || s.photoDataUrl,
+          personalStatus: newPersonalStatus,
+          absentType: newPersonalStatus === "absent" ? ("manual_student" as const) : s.absentType,
+          finalized: isStatusFinalized,
+          finalizedAt: newPersonalStatus === "present" || newPersonalStatus === "absent" ? (s.finalizedAt || nowIso) : s.finalizedAt,
+          serverReceiptAt: newPersonalStatus === "present" ? (s.serverReceiptAt || nowIso) : s.serverReceiptAt,
+          clientCaptureAt: newPersonalStatus === "present" ? (finalCapturedAt || s.clientCaptureAt || nowIso) : s.clientCaptureAt,
+          photoDataUrl: payload.photoDataUrl !== undefined ? payload.photoDataUrl : s.photoDataUrl,
           evidenceAvailable: Boolean(payload.photoDataUrl || s.photoDataUrl || s.evidenceAvailable),
           note: cleanNote !== undefined ? cleanNote : s.note,
           erpStatus: payload.erpStatus !== undefined && payload.erpStatus !== null ? payload.erpStatus : s.erpStatus,

@@ -215,7 +215,7 @@ runTest("Test G: Denominator matches total completed eligible classes across Att
 });
 
 // Test 8: Period 7 Test Class in today's schedule (12-hour window: 7:00 PM to 7:00 AM next day IST)
-runTest("Test H: Period 7 Test Class is created for today (7:00 PM to 7:00 AM next day IST) and isolated from timetable", () => {
+runTest("Test H: Period 7 Test Class is created for today (00:00 to 23:59 IST) and isolated from timetable", () => {
   const dummyUid = "test-uid";
   const data = buildDefaultSistecData(dummyUid);
 
@@ -234,13 +234,13 @@ runTest("Test H: Period 7 Test Class is created for today (7:00 PM to 7:00 AM ne
   const startObj = new Date(p7Session.scheduledStartAt);
   const endObj = new Date(p7Session.scheduledEndAt);
   const durationHours = (endObj.getTime() - startObj.getTime()) / (60 * 60 * 1000);
-  assert.equal(durationHours, 12, "Duration must be exactly 12 hours");
+  assert.equal(Math.round(durationHours), 24, "Duration must be approximately 24 hours");
 
   // IST hours:
   const istStartHours = (startObj.getUTCHours() + 5 + Math.floor((startObj.getUTCMinutes() + 30) / 60)) % 24;
   const istEndHours = (endObj.getUTCHours() + 5 + Math.floor((endObj.getUTCMinutes() + 30) / 60)) % 24;
-  assert.equal(istStartHours, 19, "Start time must be 7:00 PM IST (19:00)");
-  assert.equal(istEndHours, 7, "End time must be 7:00 AM IST (07:00) next day");
+  assert.equal(istStartHours, 0, "Start time must be 00:00 IST");
+  assert.equal(istEndHours, 23, "End time must be 23:59 IST");
 
   // 4. Verify within window (e.g. at 20:00 IST and at 02:00 AM IST next day), isSessionInWindow returns true
   const insideTimeMs1 = startObj.getTime() + 1 * 60 * 60 * 1000; // 8:00 PM IST
