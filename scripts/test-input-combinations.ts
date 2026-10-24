@@ -183,8 +183,7 @@ runCase("Case 2: AttendWise status + ERP status saves both permanently and maint
 
 // Case 3: Keynote alone
 runCase("Case 3: Keynote alone saves independently without requiring AttendWise or ERP status", () => {
-  // Use Period 7 session whose 12-hour window is currently active/unfinalized
-  const session = defaultData.sessions.find((s) => s.slot === "P7")!;
+  const session = defaultData.sessions.find((s) => s.isSpecialTraining)!;
   const saved = mockSaveCompleteAttendance(studentUid, session, {
     note: "Expert lecture by Dr. Sharma in Hall 2",
   });
@@ -224,47 +223,49 @@ runCase("Case 5: ERP status + Keynote saves both without requiring AttendWise st
 
 // Case 6: Camera photo + AttendWise status + ERP status + Keynote
 runCase("Case 6: Camera photo + AttendWise status + ERP status + Keynote persists across reload and clean device query", () => {
-  const p7Session = defaultData.sessions.find((s) => s.slot === "P7")!;
+  const pythonSessions = defaultData.sessions.filter((s) => s.isSpecialTraining);
+  const targetSession = pythonSessions[1]!;
   const testPhotoDataUrl = "data:image/jpeg;base64," + "A".repeat(45000); // Realistic ~35KB photo
   
-  const saved = mockSaveCompleteAttendance(studentUid, p7Session, {
+  const saved = mockSaveCompleteAttendance(studentUid, targetSession, {
     personalStatus: "present",
     erpStatus: "Present",
-    note: "Evening Period 7 Python debugging test session completed",
+    note: "Python debugging session completed",
     photoDataUrl: testPhotoDataUrl,
     clientCapturedAt: "2026-10-23T19:15:00.000Z",
   });
 
   assert.equal(saved.personalStatus, "present");
   assert.equal(saved.erpStatus, "Present");
-  assert.equal(saved.note, "Evening Period 7 Python debugging test session completed");
+  assert.equal(saved.note, "Python debugging session completed");
   assert.equal(saved.evidenceAvailable, true, "Evidence available must be true");
   assert.equal(saved.photoDataUrl, testPhotoDataUrl, "Photo data URL must be retained in document");
 
   // Simulated browser reload / clean device query:
-  const reloadedSession = mockFirestoreStore.get(p7Session.id);
+  const reloadedSession = mockFirestoreStore.get(targetSession.id);
   assert.ok(reloadedSession, "Session exists in Cloud Firestore");
   assert.equal(reloadedSession.personalStatus, "present", "Reloaded session maintains Present");
   assert.equal(reloadedSession.erpStatus, "Present", "Reloaded session maintains ERP");
-  assert.equal(reloadedSession.note, "Evening Period 7 Python debugging test session completed");
+  assert.equal(reloadedSession.note, "Python debugging session completed");
   assert.equal(reloadedSession.photoDataUrl, testPhotoDataUrl, "Photo data URL is preserved after reload");
   assert.equal(reloadedSession.evidenceAvailable, true, "Photo evidence flag preserved after reload");
 });
 
 // Case 7: ERP status recorded afterwards on an already Present class (idempotent note check)
 runCase("Case 7: Recording ERP status on an already marked Present class retains Present, photo, and note", () => {
-  const p7Session = mockFirestoreStore.get(defaultData.sessions.find((s) => s.slot === "P7")!.id)!;
-  assert.ok(p7Session, "P7 session was marked previously");
+  const pythonSessions = defaultData.sessions.filter((s) => s.isSpecialTraining);
+  const targetSession = mockFirestoreStore.get(pythonSessions[1]!.id)!;
+  assert.ok(targetSession, "Target session was marked previously");
 
   // Record ERP with identical note (idempotent)
-  const updated = mockSaveCompleteAttendance(studentUid, p7Session, {
+  const updated = mockSaveCompleteAttendance(studentUid, targetSession, {
     erpStatus: "Present",
-    note: p7Session.note,
+    note: targetSession.note,
   });
 
   assert.equal(updated.personalStatus, "present", "Present status remains intact");
   assert.equal(updated.erpStatus, "Present");
-  assert.equal(updated.note, "Evening Period 7 Python debugging test session completed");
+  assert.equal(updated.note, "Python debugging session completed");
   assert.ok(updated.photoDataUrl, "Photo remains intact");
 });
 

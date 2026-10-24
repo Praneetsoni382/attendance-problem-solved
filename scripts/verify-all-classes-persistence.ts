@@ -24,7 +24,6 @@ const slotP4 = defaultData.sessions.find((s) => s.slot === "P4" && !s.isSpecialT
 const slotP5 = defaultData.sessions.find((s) => s.slot === "P5" && !s.isSpecialTraining);
 const slotP6 = defaultData.sessions.find((s) => s.slot === "P6" && !s.isSpecialTraining);
 const slotPython = defaultData.sessions.find((s) => s.subjectId === "sub-python-training");
-const slotP7 = defaultData.sessions.find((s) => s.slot === "P7");
 
 assert.ok(slotP1, "Period 1 regular class session exists");
 assert.ok(slotP2, "Period 2 regular class session exists");
@@ -33,7 +32,6 @@ assert.ok(slotP4, "Period 4 regular class session exists");
 assert.ok(slotP5, "Period 5 regular class session exists");
 assert.ok(slotP6, "Period 6 regular class session exists");
 assert.ok(slotPython, "Python Training session exists");
-assert.ok(slotP7, "Period 7 evening test class session exists");
 
 console.log("✓ Verified session architecture for all period types:");
 console.log(`  • Regular P1 (09:30 - 10:30 IST): ${slotP1.subjectName} (${slotP1.subjectCode})`);
@@ -43,7 +41,6 @@ console.log(`  • Regular P4 (13:20 - 14:15 IST): ${slotP4.subjectName} (${slot
 console.log(`  • Regular P5 (14:15 - 15:10 IST): ${slotP5.subjectName} (${slotP5.subjectCode})`);
 console.log(`  • Regular P6 (15:10 - 16:10 IST): ${slotP6.subjectName} (${slotP6.subjectCode})`);
 console.log(`  • Python Training: ${slotPython.subjectName} (${slotPython.trainingProgram})`);
-console.log(`  • All-day P7 (00:00 - 23:59 IST): ${slotP7.subjectName} (${slotP7.subjectCode})`);
 
 // 2. Simulate saving attendance on Device A for ALL different periods
 // Cloud Firestore collection: users/{studentUid}/classSessions/{sessionId}
@@ -115,16 +112,7 @@ simulateSaveToCloud(slotPython, {
   serverReceiptAt: "2026-09-08T10:20:00.000Z",
 });
 
-simulateSaveToCloud(slotP7, {
-  personalStatus: "present",
-  erpStatus: "Present",
-  note: "Evening Test Class verified",
-  serverReceiptAt: "2026-10-23T19:30:00.000Z",
-  photoDataUrl: "https://firebasestorage.googleapis.com/v0/b/app/o/proof_p7.jpg",
-  evidenceAvailable: true,
-});
-
-console.log("\n✓ Device A successfully saved attendance for all 8 distinct classes into Cloud Firestore!");
+console.log("\n✓ Device A successfully saved attendance for all 7 distinct classes into Cloud Firestore!");
 console.log(`  Total cloud documents stored: ${cloudFirestoreDatabase.size}`);
 
 // 3. Simulate completely new Device B (Phone / Laptop / Tab)
@@ -185,11 +173,7 @@ const b_python = deviceBHydratedSessions.find((s) => s.id === slotPython.id)!;
 assert.equal(b_python.personalStatus, "present", "Python Training must be Present on Device B");
 assert.equal(b_python.note, "Python NumPy and Pandas data analysis hands-on", "Python note preserved");
 
-const b_p7 = deviceBHydratedSessions.find((s) => s.id === slotP7.id)!;
-assert.equal(b_p7.personalStatus, "present", "P7 must be Present on Device B");
-assert.equal(b_p7.photoDataUrl, "https://firebasestorage.googleapis.com/v0/b/app/o/proof_p7.jpg", "P7 Photo preserved");
-
-console.log("✓ All 8 class sessions loaded perfectly on Device B directly from Cloud Firestore!");
+console.log("✓ All 7 class sessions loaded perfectly on Device B directly from Cloud Firestore!");
 console.log("  • P1 (Theory): Present + Photo + Keynote + ERP Present");
 console.log("  • P2 (Theory): Present + Photo + ERP Present");
 console.log("  • P3 (Theory): Absent + Medical Note + ERP Absent");

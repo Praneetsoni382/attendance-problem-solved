@@ -14,24 +14,13 @@ export interface SessionLike {
   erpStatus?: "Present" | "Absent" | null;
   finalized: boolean;
   finalizedAt?: string | null;
-  isFrozen?: boolean;
   frozenAt?: string | null;
-  freezeReason?: string | null;
   cancelledAt?: string | null;
   slot?: string;
   room?: string | null;
   note?: string | null;
   previousPersonalStatus?: string | null;
   previousErpStatus?: string | null;
-}
-
-export function isSessionFrozen(session: SessionLike | any | null | undefined): boolean {
-  if (!session) return false;
-  return Boolean(
-    session.personalStatus === "frozen" ||
-    session.isFrozen === true ||
-    session.frozenAt
-  );
 }
 
 export interface MetricResult {
@@ -143,9 +132,28 @@ export interface FullAnalyticsSummary {
  * Future or in-progress classes that have not yet been marked present are excluded.
  */
 export function isSessionEligible(session: SessionLike, nowMs: number = Date.now()): boolean {
+  if (!session) return false;
+
+  // 0. Completely purge/reject any P7 test class sessions
+  if (
+    session.slot === "P7" ||
+    session.subjectId === "sub-test-class-p7" ||
+    session.subjectCode === "TEST-P7" ||
+    session.id.includes("test-class-p7") ||
+    session.id.includes("P7")
+  ) {
+    return false;
+  }
+
   // 1. Python Training historical sessions are permanently capped at 66 completed sessions
   if (session.subjectId === "sub-python-training" || (session as any).isSpecialTraining) {
-    if (isSessionFrozen(session) || session.personalStatus === "cancelled") {
+    if (
+      session.personalStatus === "frozen" ||
+      Boolean((session as any).frozenAt) ||
+      Boolean((session as any).isFrozen) ||
+      session.personalStatus === "cancelled" ||
+      Boolean((session as any).cancelledAt)
+    ) {
       return false;
     }
     return true;
@@ -156,13 +164,20 @@ export function isSessionEligible(session: SessionLike, nowMs: number = Date.now
     return false;
   }
 
-  // 3. Frozen classes are strictly excluded from calculations & denominators
-  if (isSessionFrozen(session)) {
+  // 3. Frozen classes are strictly excluded from calculations & denominators in real time
+  if (
+    session.personalStatus === "frozen" ||
+    Boolean((session as any).frozenAt) ||
+    Boolean((session as any).isFrozen)
+  ) {
     return false;
   }
 
   // 4. Cancelled classes are strictly excluded
-  if (session.personalStatus === "cancelled") {
+  if (
+    session.personalStatus === "cancelled" ||
+    Boolean((session as any).cancelledAt)
+  ) {
     return false;
   }
 
@@ -308,8 +323,23 @@ export function computeFullAnalytics(
   allSessions: SessionLike[],
   nowMs: number = Date.now()
 ): FullAnalyticsSummary {
+  // 0. Completely purge P7 test classes and unformatted items across the entire analytics engine
+  const cleanSessions = (allSessions || []).filter((s) => {
+    if (!s) return false;
+    if (
+      s.slot === "P7" ||
+      s.subjectId === "sub-test-class-p7" ||
+      s.subjectCode === "TEST-P7" ||
+      s.id.includes("test-class-p7") ||
+      s.id.includes("P7")
+    ) {
+      return false;
+    }
+    return true;
+  });
+
   // 1. Filter authoritative eligible sessions
-  const eligible = allSessions.filter((s) => isSessionEligible(s, nowMs));
+  const eligible = cleanSessions.filter((s) => isSessionEligible(s, nowMs));
 
   // 2. Compute primary overall attendance metrics
   const overallAw = calculateAttendwiseMetric(eligible);
@@ -330,7 +360,7 @@ export function computeFullAnalytics(
   };
 
   // 4. Excluded and upcoming informational counts
-  const frozenCount = allSessions.filter((s) => isSessionFrozen(s)).length;
+  const frozenCount = allSessions.filter((s) => s.personalStatus === "frozen").length;
   const cancelledCount = allSessions.filter((s) => s.personalStatus === "cancelled").length;
   const upcomingCount = allSessions.filter(
     (s) =>

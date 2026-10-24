@@ -15,7 +15,7 @@ async function testCameraSave() {
     console.log("User created:", user.uid);
 
     const defaultData = buildDefaultSistecData(user.uid);
-    const session = defaultData.sessions.find((s) => s.slot === "P7")!;
+    const session = defaultData.sessions.find((s) => s.isSpecialTraining)!;
 
     // Create a 100KB base64 JPEG image payload (typical captured camera snapshot)
     const base64Data = "A".repeat(100000);

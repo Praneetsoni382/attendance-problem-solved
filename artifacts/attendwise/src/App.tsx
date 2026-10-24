@@ -59,6 +59,7 @@ import {
   logOutStudent,
   ensureSistecTimetableLoaded,
   ensurePythonTrainingLoaded,
+  purgeP7TestClass,
   syncTimetableSlotTimings,
   buildDefaultSistecData,
   saveCompleteAttendanceRecord,
@@ -77,7 +78,6 @@ import {
   TIMEZONE,
   handleFirestoreError,
   OperationType,
-  isSessionFrozen,
   storage,
   resolveSessionEvidenceUrl,
   type StudentProfile,
@@ -88,7 +88,7 @@ import {
 } from "./lib/firebase";
 import { dataManager } from "./lib/data-manager";
 import { setCachedStore } from "./lib/idb-cache";
-import { computeFullAnalytics } from "./lib/analytics-calculator";
+import { computeFullAnalytics, isSessionEligible } from "./lib/analytics-calculator";
 import { useCamera } from "./hooks/useCamera";
 import {
   registerStudent,
@@ -332,14 +332,14 @@ const asPct = (value: number | null | undefined) =>
   value === null || value === undefined ? "N/A" : `${Math.round(value)}%`;
 
 const isSessionInWindow = (session: ClassSessionItem, nowMs: number = Date.now()) => {
-  if (session.finalized || session.personalStatus === "cancelled" || isSessionFrozen(session)) return false;
+  if (session.finalized || session.personalStatus === "cancelled" || session.personalStatus === "frozen") return false;
   const startMs = new Date(session.scheduledStartAt).getTime();
   const endMs = new Date(session.scheduledEndAt).getTime();
   return !isNaN(startMs) && !isNaN(endMs) && nowMs >= startMs && nowMs < endMs;
 };
 
 const sessionStatusLabel = (session: ClassSessionItem, nowMs: number = Date.now()) => {
-  if (isSessionFrozen(session)) return "Class Frozen (Excluded)";
+  if (session.personalStatus === "frozen") return "Class Frozen (Excluded)";
   if (session.personalStatus === "cancelled") return "Cancelled";
   if (session.personalStatus === "present") return "Present";
   if (session.personalStatus === "absent") {
@@ -1158,7 +1158,7 @@ function AttendanceCardDialog({
   onRecordErp?: (sessionId: string, status: "Present" | "Absent") => Promise<void>;
   onMarkPresent?: (sessionId: string, photoUrl?: string, note?: string, capturedAt?: string) => Promise<void>;
   onMarkAbsent?: (sessionId: string, note?: string) => Promise<void>;
-  onFreezeClass?: (sessionId: string, reason?: string) => Promise<void>;
+  onFreezeClass?: (sessionId: string) => Promise<void>;
   onSaveCompleteAttendance?: (sessionId: string, payload: CompleteAttendancePayload) => Promise<void>;
 }) {
   // Always derive the most authoritative, live session state from the parent sessions listener
@@ -1172,12 +1172,10 @@ function AttendanceCardDialog({
   const [events, setEvents] = useState<AttendanceEventItem[]>([]);
   const [secondsRemaining, setSecondsRemaining] = useState<number | null>(null);
   const [noteInput, setNoteInput] = useState(session?.note || "");
-  const [freezeReasonInput, setFreezeReasonInput] = useState(session?.freezeReason || "");
   const [evidencePhotoUrl, setEvidencePhotoUrl] = useState<string | null>(null);
   const [confirmFreeze, setConfirmFreeze] = useState(false);
   const [capturedPhotoUrl, setCapturedPhotoUrl] = useState<string | null>(null);
   const [capturedPhotoAt, setCapturedPhotoAt] = useState<string | null>(null);
-  const prevSessionIdRef = useRef<string | null>(null);
   
   const { 
     videoRef, 
@@ -1228,43 +1226,17 @@ function AttendanceCardDialog({
   const snapPhoto = () => {
     if (!videoRef.current) return;
     const canvas = document.createElement("canvas");
-    canvas.width = 240;
-    canvas.height = 180;
+    canvas.width = Math.min(videoRef.current.videoWidth || 320, 320);
+    canvas.height = Math.min(videoRef.current.videoHeight || 240, 240);
     const ctx = canvas.getContext("2d");
     if (ctx) {
-      ctx.drawImage(videoRef.current, 0, 0, 240, 180);
-      const dataUrl = canvas.toDataURL("image/jpeg", 0.35);
+      ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
+      const dataUrl = canvas.toDataURL("image/jpeg", 0.5);
       const captureInstant = new Date().toISOString();
       setCapturedPhotoUrl(dataUrl);
       setCapturedPhotoAt(captureInstant);
     }
     stopCamera();
-  };
-
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (evt) => {
-      const srcData = evt.target?.result as string;
-      if (!srcData) return;
-      const img = new Image();
-      img.onload = () => {
-        const canvas = document.createElement("canvas");
-        canvas.width = 240;
-        canvas.height = 180;
-        const ctx = canvas.getContext("2d");
-        if (ctx) {
-          ctx.drawImage(img, 0, 0, 240, 180);
-          const dataUrl = canvas.toDataURL("image/jpeg", 0.35);
-          const captureInstant = new Date().toISOString();
-          setCapturedPhotoUrl(dataUrl);
-          setCapturedPhotoAt(captureInstant);
-        }
-      };
-      img.src = srcData;
-    };
-    reader.readAsDataURL(file);
   };
 
   const [stagedPersonalStatus, setStagedPersonalStatus] = useState<string | null>(null);
@@ -1273,48 +1245,40 @@ function AttendanceCardDialog({
 
   useEffect(() => {
     if (!open) {
-      prevSessionIdRef.current = null;
       setCapturedPhotoUrl(null);
       setCapturedPhotoAt(null);
-      setStagedPersonalStatus(null);
-      setStagedErpStatus(null);
-      setStagedNote("");
-      setFreezeReasonInput("");
-      setConfirmFreeze(false);
       stopCamera();
-      return;
     }
+  }, [open]);
 
-    if (session && session.id !== prevSessionIdRef.current) {
-      prevSessionIdRef.current = session.id;
-      setCapturedPhotoUrl(session.photoDataUrl || null);
-      setCapturedPhotoAt(session.clientCaptureAt || null);
+  useEffect(() => {
+    if (session) {
+      setCapturedPhotoUrl(null);
+      setCapturedPhotoAt(null);
       setStagedPersonalStatus(session.personalStatus);
       setStagedErpStatus(session.erpStatus);
       setStagedNote(session.note || "");
       setNoteInput(session.note || "");
-      setFreezeReasonInput(session.freezeReason || "");
       setConfirmFreeze(false);
     }
-  }, [open, session?.id, stopCamera]);
+  }, [session?.id, session?.personalStatus, session?.erpStatus, session?.note]);
 
   const todayKey = formatDateKey(new Date());
   const nowMs = Date.now();
   const startMs = session ? new Date(session.scheduledStartAt).getTime() : 0;
   const endMs = session ? new Date(session.scheduledEndAt).getTime() : 0;
-  const isP7 = session?.slot === "P7" || session?.subjectCode === "TEST-P7" || session?.subjectId === "sub-test-class-p7";
-  const isToday = session?.scheduledDate === todayKey || (isP7 && nowMs >= startMs && nowMs < endMs);
+  const isToday = session?.scheduledDate === todayKey;
 
-  const isFrozen = stagedPersonalStatus === "frozen" || isSessionFrozen(session);
+  const isFrozen = stagedPersonalStatus === "frozen" || session?.personalStatus === "frozen";
   const isPresentAlready = session?.personalStatus === "present";
   const isHistoricalTraining = Boolean(session?.isSpecialTraining || session?.subjectId === PYTHON_TRAINING_SUBJECT.id);
   const inWindow = Boolean(
     session && !session.finalized && !isPresentAlready && (
-      isHistoricalTraining || ((isToday || isP7) && nowMs >= startMs && nowMs < endMs)
+      isHistoricalTraining || (isToday && nowMs >= startMs && nowMs < endMs)
     )
   );
   const isWindowOverdue = Boolean(
-    session && !isPresentAlready && !isHistoricalTraining && (session.personalStatus === "absent" || ((isToday || isP7) && nowMs >= endMs))
+    session && !isPresentAlready && !isHistoricalTraining && (session.personalStatus === "absent" || (isToday && nowMs >= endMs))
   );
 
   // Active window countdown
@@ -1695,27 +1659,15 @@ function AttendanceCardDialog({
                       {cameraError && (
                         <p className="text-xs text-rose-600 bg-rose-50 p-2 rounded">{cameraError}</p>
                       )}
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          onClick={startCamera}
-                          className="w-full text-xs"
-                        >
-                          <Camera className="h-3.5 w-3.5 mr-1.5 text-primary" /> {cameraError ? "Retry Camera" : "Enable Live Camera"}
-                        </Button>
-                        <label className="cursor-pointer inline-flex items-center justify-center rounded-md border border-input bg-background px-3 py-1.5 text-xs font-medium shadow-xs hover:bg-accent hover:text-accent-foreground text-foreground">
-                          <Plus className="h-3.5 w-3.5 mr-1.5 text-primary" /> Attach Photo File
-                          <input
-                            type="file"
-                            accept="image/*"
-                            capture="environment"
-                            className="hidden"
-                            onChange={handleFileUpload}
-                          />
-                        </label>
-                      </div>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={startCamera}
+                        className="w-full text-xs"
+                      >
+                        <Camera className="h-3.5 w-3.5 mr-1.5" /> {cameraError ? "Retry Camera" : "Enable Live Camera (Optional)"}
+                      </Button>
                     </div>
                   )}
                 </div>
@@ -1902,23 +1854,11 @@ function AttendanceCardDialog({
 
           {/* Freeze Class Option */}
           {isFrozen ? (
-            <div className="rounded-xl border p-4 bg-sky-500/10 border-sky-500/20 text-sky-900 dark:text-sky-200 text-xs space-y-1 text-center">
-              <div className="flex items-center justify-center gap-2 font-semibold">
-                <Snowflake className="h-4 w-4 text-sky-600 dark:text-sky-400" /> Class Is Frozen (Permanently Excluded)
-              </div>
-              {session.freezeReason ? (
-                <p className="text-[11px] text-sky-800 dark:text-sky-300 italic">
-                  Reason: &quot;{session.freezeReason}&quot;
-                </p>
-              ) : null}
-              {session.frozenAt ? (
-                <p className="text-[10px] text-muted-foreground">
-                  Frozen on {formatDate(session.frozenAt.slice(0, 10))} at {formatClock(session.frozenAt)} IST
-                </p>
-              ) : null}
+            <div className="rounded-xl border p-4 bg-sky-500/10 border-sky-500/20 text-sky-900 dark:text-sky-200 text-xs font-semibold text-center flex items-center justify-center gap-2">
+              <Snowflake className="h-4 w-4 text-sky-600 dark:text-sky-400" /> Class Is Freezed (Permanently Cancelled & Excluded)
             </div>
           ) : (
-            <div className="rounded-xl border p-4 bg-rose-50/50 border-rose-100 dark:bg-rose-950/20 dark:border-rose-900/50 space-y-2.5">
+            <div className="rounded-xl border p-4 bg-rose-50/50 border-rose-100 dark:bg-rose-950/20 dark:border-rose-900/50 space-y-2">
               <div className="flex items-center justify-between">
                 <h4 className="text-xs font-semibold text-rose-800 dark:text-rose-300 flex items-center gap-1.5">
                   <Snowflake className="h-4 w-4 text-rose-600" /> Freeze Class (Cancel & Exclude)
@@ -1937,15 +1877,8 @@ function AttendanceCardDialog({
                     <AlertTriangle className="h-4 w-4 text-rose-600" /> Confirm Permanent Class Freeze?
                   </p>
                   <p className="text-[11px] text-rose-800 dark:text-rose-300">
-                    This class will be permanently removed from all calculations, regardless of prior attendance or ERP records.
+                    This class will be permanently removed from all calculations. This action is irreversible and one-time final.
                   </p>
-                  <Input
-                    value={freezeReasonInput}
-                    onChange={(e) => setFreezeReasonInput(e.target.value)}
-                    placeholder="Reason for freezing (e.g. Faculty on leave, College event, Medical)"
-                    className="text-xs h-8 bg-background"
-                    disabled={busy}
-                  />
                   <div className="flex gap-2 pt-1">
                     <Button
                       size="sm"
@@ -1957,11 +1890,10 @@ function AttendanceCardDialog({
                         setError(null);
                         try {
                           setStagedPersonalStatus("frozen");
-                          const reasonToSave = freezeReasonInput.trim() || undefined;
                           if (onFreezeClass) {
-                            await onFreezeClass(session.id, reasonToSave);
+                            await onFreezeClass(session.id);
                           } else {
-                            await freezeClassSession(user.uid, session.id, reasonToSave);
+                            await freezeClassSession(user.uid, session.id);
                           }
                           setNotice("Class successfully frozen and permanently removed from all calculations.");
                           setConfirmFreeze(false);
@@ -2105,7 +2037,7 @@ function Dashboard({
   onRecordErp?: (sessionId: string, status: "Present" | "Absent") => Promise<void>;
   onMarkPresent?: (sessionId: string, photoUrl?: string, note?: string, capturedAt?: string) => Promise<void>;
   onMarkAbsent?: (sessionId: string, note?: string) => Promise<void>;
-  onFreezeClass?: (sessionId: string, reason?: string) => Promise<void>;
+  onFreezeClass?: (sessionId: string) => Promise<void>;
   onSaveCompleteAttendance?: (sessionId: string, payload: CompleteAttendancePayload) => Promise<void>;
 }) {
   const [selectedCardSession, setSelectedCardSession] = useState<ClassSessionItem | null>(null);
@@ -3103,7 +3035,7 @@ function AttendanceHistory({
   onRecordErp?: (sessionId: string, status: "Present" | "Absent") => Promise<void>;
   onMarkPresent?: (sessionId: string, photoUrl?: string, note?: string, capturedAt?: string) => Promise<void>;
   onMarkAbsent?: (sessionId: string, note?: string) => Promise<void>;
-  onFreezeClass?: (sessionId: string, reason?: string) => Promise<void>;
+  onFreezeClass?: (sessionId: string) => Promise<void>;
   onSaveCompleteAttendance?: (sessionId: string, payload: CompleteAttendancePayload) => Promise<void>;
 }) {
   const [selectedSession, setSelectedSession] = useState<ClassSessionItem | null>(null);
@@ -3711,18 +3643,18 @@ function Comparison({
   user: FirebaseUser;
   sessions: ClassSessionItem[];
   onRecordErp?: (sessionId: string, status: "Present" | "Absent") => Promise<void>;
-  onFreezeClass?: (sessionId: string, reason?: string) => Promise<void>;
+  onFreezeClass?: (sessionId: string) => Promise<void>;
 }) {
   const [selectedSession, setSelectedSession] = useState<ClassSessionItem | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
 
   const stats = useMemo(() => computeAttendanceStats(sessions), [sessions]);
 
-  // Eligible finalized sessions (strictly excluding all frozen sessions)
+  // Eligible finalized sessions
   const eligibleSessions = useMemo(
     () =>
       sessions
-        .filter((s) => s.finalized && !isSessionFrozen(s) && (s.personalStatus === "present" || s.personalStatus === "absent"))
+        .filter((s) => isSessionEligible(s))
         .sort((a, b) => new Date(b.scheduledStartAt).getTime() - new Date(a.scheduledStartAt).getTime()),
     [sessions]
   );
@@ -4096,17 +4028,20 @@ function _LegacyInlineAnalyticsPage({
         <CardContent>
           <div className="grid gap-4 sm:grid-cols-2">
             {filteredSubjects.map((sub) => {
-              const subSessions = sessions.filter(
-                (s) => s.subjectId === sub.id && s.finalized && s.personalStatus !== "frozen" && (s.personalStatus === "present" || s.personalStatus === "absent")
-              );
-              const present = subSessions.filter((s) => s.personalStatus === "present").length;
-              const total = subSessions.length;
-              const pct = total === 0 ? null : Math.round((present / total) * 1000) / 10;
-              
-              const subErp = subSessions.filter((s) => s.erpStatus === "Present" || s.erpStatus === "Absent");
-              const erpPresent = subErp.filter((s) => s.erpStatus === "Present").length;
-              const erpPct = total === 0 ? null : Math.round((erpPresent / total) * 1000) / 10;
-              const erpNotEntered = subSessions.filter((s) => s.erpStatus === null).length;
+              const subAna = analytics.subjects.find((s) => s.subjectId === sub.id) || {
+                subjectId: sub.id,
+                subjectName: sub.name,
+                subjectCode: sub.code,
+                category: sub.category,
+                totalEligible: 0,
+                attendwise: { percentage: null, presentCount: 0, absentCount: 0, totalEligible: 0 },
+                erp: { percentage: null, presentCount: 0, absentCount: 0, notEnteredCount: 0, totalEligible: 0 },
+              };
+              const present = subAna.attendwise.presentCount;
+              const total = subAna.totalEligible;
+              const pct = subAna.attendwise.percentage;
+              const erpPct = subAna.erp.percentage;
+              const erpNotEntered = subAna.erp.notEnteredCount;
               const frozenCount = sessions.filter((s) => s.subjectId === sub.id && s.personalStatus === "frozen").length;
 
               return (
@@ -4306,12 +4241,12 @@ function SessionDetail({
   const snapPhoto = () => {
     if (!videoRef.current) return;
     const canvas = document.createElement("canvas");
-    canvas.width = 240;
-    canvas.height = 180;
+    canvas.width = videoRef.current.videoWidth || 640;
+    canvas.height = videoRef.current.videoHeight || 480;
     const ctx = canvas.getContext("2d");
     if (ctx) {
-      ctx.drawImage(videoRef.current, 0, 0, 240, 180);
-      const dataUrl = canvas.toDataURL("image/jpeg", 0.35);
+      ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
+      const dataUrl = canvas.toDataURL("image/jpeg", 0.7);
       const captureInstant = new Date().toISOString();
       setCapturedPhotoUrl(dataUrl);
       setCapturedPhotoAt(captureInstant);
@@ -4322,32 +4257,6 @@ function SessionDetail({
       streamRef.current = null;
     }
     setCameraActive(false);
-  };
-
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (evt) => {
-      const srcData = evt.target?.result as string;
-      if (!srcData) return;
-      const img = new Image();
-      img.onload = () => {
-        const canvas = document.createElement("canvas");
-        canvas.width = 240;
-        canvas.height = 180;
-        const ctx = canvas.getContext("2d");
-        if (ctx) {
-          ctx.drawImage(img, 0, 0, 240, 180);
-          const dataUrl = canvas.toDataURL("image/jpeg", 0.35);
-          const captureInstant = new Date().toISOString();
-          setCapturedPhotoUrl(dataUrl);
-          setCapturedPhotoAt(captureInstant);
-        }
-      };
-      img.src = srcData;
-    };
-    reader.readAsDataURL(file);
   };
 
   const handleMarkPresent = async () => {
@@ -4616,27 +4525,15 @@ function SessionDetail({
                         </Button>
                       </div>
                     ) : (
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          onClick={startCamera}
-                          className="w-full text-xs"
-                        >
-                          <Camera className="h-3.5 w-3.5 mr-1.5 text-primary" /> Enable Live Camera
-                        </Button>
-                        <label className="cursor-pointer inline-flex items-center justify-center rounded-md border border-input bg-background px-3 py-1.5 text-xs font-medium shadow-xs hover:bg-accent hover:text-accent-foreground text-foreground">
-                          <Plus className="h-3.5 w-3.5 mr-1.5 text-primary" /> Attach Photo File
-                          <input
-                            type="file"
-                            accept="image/*"
-                            capture="environment"
-                            className="hidden"
-                            onChange={handleFileUpload}
-                          />
-                        </label>
-                      </div>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={startCamera}
+                        className="w-full text-xs"
+                      >
+                        <Camera className="h-3.5 w-3.5 mr-1.5" /> Enable Live Camera (Optional)
+                      </Button>
                     )}
                   </div>
 
@@ -4902,9 +4799,32 @@ export default function App() {
   const [sessionsInitialLoading, setSessionsInitialLoading] = useState(true);
   const [, setLocation] = useLocation();
 
-  // Ensure user always lands on LandingPage first upon visiting website
+  // Listen to Firebase Auth state
   useEffect(() => {
-    setAuthLoading(false);
+    const sessionActive =
+      localStorage.getItem("attendwise_session_active") ||
+      sessionStorage.getItem("attendwise_session_active");
+
+    const unsubscribe = auth.onAuthStateChanged(async (currentUser) => {
+      if (currentUser) {
+        localStorage.setItem("attendwise_session_active", "true");
+        sessionStorage.setItem("attendwise_session_active", "true");
+        setUser((prev) => (prev?.uid === currentUser.uid ? prev : currentUser));
+      } else {
+        // If not in Firebase Auth, check local student session
+        const localActive = getStoredActiveSession();
+        if (localActive && sessionActive) {
+          localStorage.setItem("attendwise_session_active", "true");
+          sessionStorage.setItem("attendwise_session_active", "true");
+          setUser((prev) => (prev?.uid === localActive.uid ? prev : localActive));
+        } else {
+          setUser(null);
+        }
+      }
+      setAuthLoading(false);
+    });
+
+    return () => unsubscribe();
   }, []);
 
   // Listen to Firestore data when user is authenticated with Firebase, or initialize local SISTec data
@@ -4962,6 +4882,9 @@ export default function App() {
     });
 
     if (auth.currentUser && auth.currentUser.uid === user.uid) {
+      // Clean up any stale P7 test class data
+      purgeP7TestClass(user.uid).catch(console.warn);
+
       // Ensure Firestore has all SISTec subjects, timetable slots, and Python training seeded
       ensureSistecTimetableLoaded(user.uid).catch((err) => {
         console.warn("Firestore timetable sync background notice:", err);
@@ -5066,7 +4989,15 @@ export default function App() {
             }
           });
 
-          setSessions(mergedList);
+          const cleanMergedList = mergedList.filter(
+            (s) =>
+              s.slot !== "P7" &&
+              s.subjectId !== "sub-test-class-p7" &&
+              s.subjectCode !== "TEST-P7" &&
+              !s.id.includes("test-class-p7")
+          );
+
+          setSessions(cleanMergedList);
           setSessionsInitialLoading(false);
 
           if (missingTrainingCount > 0) {
@@ -5331,22 +5262,17 @@ export default function App() {
     }
   };
 
-  const handleFreezeClassQuick = async (sessionId: string, reason?: string) => {
+  const handleFreezeClassQuick = async (sessionId: string) => {
     const nowIso = new Date().toISOString();
-    const cleanReason = reason?.trim() || null;
-    const currentS = sessions.find((s) => s.id === sessionId);
-    const targetStatus = currentS?.personalStatus === "present" ? ("present" as const) : ("frozen" as const);
     setSessions((prev) => {
       const updated = prev.map((s) =>
         s.id === sessionId
           ? {
               ...s,
-              isFrozen: true,
-              frozenAt: nowIso,
-              freezeReason: cleanReason,
+              personalStatus: "frozen" as const,
               finalized: true,
+              frozenAt: nowIso,
               finalizedAt: nowIso,
-              personalStatus: s.personalStatus === "present" ? ("present" as const) : ("frozen" as const),
               previousPersonalStatus: s.personalStatus !== "frozen" ? s.personalStatus : "absent",
               previousErpStatus: s.erpStatus ?? null,
             }
@@ -5355,34 +5281,30 @@ export default function App() {
       void setCachedStore("sessions", updated).catch(() => {});
       return updated;
     });
+    const currentS = sessions.find((s) => s.id === sessionId);
     persistLocalSessionOverride(sessionId, {
-      isFrozen: true,
-      frozenAt: nowIso,
-      freezeReason: cleanReason,
-      personalStatus: targetStatus,
+      personalStatus: "frozen",
       finalized: true,
+      frozenAt: nowIso,
       finalizedAt: nowIso,
       previousPersonalStatus: currentS && currentS.personalStatus !== "frozen" ? currentS.personalStatus : "absent",
       previousErpStatus: currentS?.erpStatus ?? null,
     });
     if (user) {
-      await freezeClassSession(user.uid, sessionId, cleanReason || undefined);
+      await freezeClassSession(user.uid, sessionId);
     }
   };
 
   const handleUnfreezeClassQuick = async (sessionId: string) => {
-    const currentS = sessions.find((s) => s.id === sessionId);
-    const restoredStatus =
-      (currentS as any)?.previousPersonalStatus === "present" ? "present" : "absent";
     setSessions((prev) => {
       const updated = prev.map((s) => {
         if (s.id !== sessionId) return s;
+        const restoredStatus =
+          (s as any).previousPersonalStatus === "present" ? "present" : "absent";
         return {
           ...s,
-          isFrozen: false,
-          frozenAt: null,
-          freezeReason: null,
           personalStatus: restoredStatus as const,
+          frozenAt: null,
           finalized: true,
         };
       });
@@ -5390,10 +5312,8 @@ export default function App() {
       return updated;
     });
     persistLocalSessionOverride(sessionId, {
-      isFrozen: false,
+      personalStatus: "absent",
       frozenAt: null,
-      freezeReason: null,
-      personalStatus: restoredStatus,
       finalized: true,
     });
     if (user) {

@@ -220,9 +220,7 @@ export interface ClassSessionItem {
   erpRecordedAt?: string | null;
   note?: string | null;
   absentType?: "manual_student" | "automatic_overdue" | null;
-  isFrozen?: boolean;
   frozenAt?: string | null;
-  freezeReason?: string | null;
   canMarkPresent?: boolean;
   finalized: boolean;
   finalizedAt?: string | null;
@@ -551,6 +549,7 @@ export async function ensureSistecTimetableLoaded(uid: string): Promise<void> {
   if (!auth.currentUser || auth.currentUser.uid !== uid) {
     return;
   }
+  void purgeP7TestClass(uid).catch(() => {});
   try {
     const sessionsRef = collection(db, "users", uid, "classSessions");
     const sessionCheck = await getDocs(query(sessionsRef, limit(1)));
@@ -783,38 +782,6 @@ export function buildDefaultSistecData(uid: string): {
     pyDayNum++;
   }
 
-  // Period 7 Test Class (00:00 to 23:59 IST all-day test window), isolated from the daily timetable
-  const todayKey = formatDateKey(now);
-  const p7StartAt = makeIstDateTime(todayKey, "00:00");
-  const p7EndAt = new Date(makeIstDateTime(todayKey, "23:59").getTime() + 59 * 1000 + 999);
-  const p7Overdue = now.getTime() >= p7EndAt.getTime();
-  sessions.push({
-    id: `session-test-class-p7-${todayKey}`,
-    studentId: uid,
-    subjectId: "sub-test-class-p7",
-    subjectName: "Test Class",
-    subjectCode: "TEST-P7",
-    timetableEntryId: null,
-    slot: "P7",
-    scheduledDate: todayKey,
-    scheduledStartAt: p7StartAt.toISOString(),
-    scheduledEndAt: p7EndAt.toISOString(),
-    category: "Theory",
-    room: "Online Test Lab",
-    personalStatus: p7Overdue ? "absent" : "upcoming",
-    erpStatus: null,
-    note: null,
-    canMarkPresent: !p7Overdue,
-    finalized: p7Overdue,
-    finalizedAt: p7Overdue ? p7EndAt.toISOString() : null,
-    serverReceiptAt: null,
-    clientCaptureAt: null,
-    cancelledAt: null,
-    evidenceAvailable: false,
-    academicDayNumber: null,
-    createdAt: now.toISOString(),
-  });
-
   return { subjects, timetable, sessions };
 }
 
@@ -858,13 +825,20 @@ export async function generateWeeklySessions(uid: string): Promise<void> {
         continue; // Never delete Python Training sessions
       }
 
-      // Maintain Period 7 test class for extended student application testing
       if (
         sData.slot === "P7" ||
         sData.subjectId === "sub-test-class-p7" ||
-        sData.id.startsWith("session-test-class-p7")
+        sData.subjectCode === "TEST-P7" ||
+        sDoc.id.includes("test-class-p7") ||
+        sDoc.id.includes("P7")
       ) {
-        continue; // Maintain P7 test class
+        try {
+          batch.delete(sDoc.ref);
+          opCount++;
+          if (opCount >= 400) await commitBatch();
+          existingDateIds.delete(sDoc.id);
+        } catch {}
+        continue;
       }
 
       if (!isTeachingDay(sData.scheduledDate)) {
@@ -959,25 +933,22 @@ export {
   BTECH_3RD_TEACHING_DAYS,
 };
 
-// Utility to compress base64 images into lightweight thumbnails (<15KB-25KB) that fit safely inside Firestore & IndexedDB
-export function compressImageBase64(dataUrl: string, maxDimension = 240, quality = 0.35): Promise<string> {
+// Utility to compress base64 images into lightweight thumbnails (<30KB) that fit safely inside Firestore & IndexedDB
+export function compressImageBase64(dataUrl: string, maxDimension = 280, quality = 0.4): Promise<string> {
   return new Promise((resolve) => {
-    if (!dataUrl || !dataUrl.startsWith("data:image")) {
+    if (!dataUrl || typeof dataUrl !== "string" || !dataUrl.startsWith("data:image")) {
       return resolve(dataUrl || "");
     }
-
-    if (dataUrl.length <= 28000) {
+    if (dataUrl.length <= 60000) {
+      return resolve(dataUrl);
+    }
+    if (typeof window === "undefined" || typeof document === "undefined") {
       return resolve(dataUrl);
     }
 
-    if (typeof window === "undefined" || typeof document === "undefined" || typeof Image === "undefined") {
-      return resolve(dataUrl);
-    }
-
-    // Safety timeout: resolve original or safe empty if loading exceeds 1.5s
     const timer = setTimeout(() => {
-      resolve(dataUrl.length <= 35000 ? dataUrl : "");
-    }, 1500);
+      resolve(dataUrl);
+    }, 800);
 
     const img = new Image();
     img.onload = () => {
@@ -1000,31 +971,7 @@ export function compressImageBase64(dataUrl: string, maxDimension = 240, quality
         const ctx = canvas.getContext("2d");
         if (!ctx) return resolve(dataUrl);
         ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-        let compressed = canvas.toDataURL("image/jpeg", quality);
-
-        // If still over 28KB, scale down canvas resolution further
-        if (compressed.length > 28000) {
-          const canvasSmall = document.createElement("canvas");
-          canvasSmall.width = 160;
-          canvasSmall.height = Math.round((height * 160) / width) || 120;
-          const ctxSmall = canvasSmall.getContext("2d");
-          if (ctxSmall) {
-            ctxSmall.drawImage(img, 0, 0, canvasSmall.width, canvasSmall.height);
-            compressed = canvasSmall.toDataURL("image/jpeg", 0.25);
-          }
-        }
-
-        if (compressed.length > 35000) {
-          const canvasTiny = document.createElement("canvas");
-          canvasTiny.width = 120;
-          canvasTiny.height = Math.round((height * 120) / width) || 90;
-          const ctxTiny = canvasTiny.getContext("2d");
-          if (ctxTiny) {
-            ctxTiny.drawImage(img, 0, 0, canvasTiny.width, canvasTiny.height);
-            compressed = canvasTiny.toDataURL("image/jpeg", 0.2);
-          }
-        }
-
+        const compressed = canvas.toDataURL("image/jpeg", quality);
         resolve(compressed);
       } catch {
         resolve(dataUrl);
@@ -1036,12 +983,6 @@ export function compressImageBase64(dataUrl: string, maxDimension = 240, quality
     };
     img.src = dataUrl;
   });
-}
-
-function truncateOrDownscaleBase64(dataUrl: string, maxBytes = 35000): string {
-  if (!dataUrl) return "";
-  // Never slice base64 image characters, as string slicing corrupts JPEG data
-  return dataUrl;
 }
 
 // Atomic Complete Attendance & Evidence Saver (Unified Cloud Firestore Transaction)
@@ -1065,49 +1006,21 @@ export async function saveCompleteAttendanceRecord(
   const receiptAt = new Date().toISOString();
   const captureTimestamp = payload.clientCapturedAt || receiptAt;
 
-  // 1. Photo evidence processing with guaranteed inline compression:
+  // 1. Non-blocking photo evidence compression:
   let compressedPhotoUrl: string | null = null;
   if (payload.photoDataUrl && payload.photoDataUrl.startsWith("data:")) {
     try {
-      compressedPhotoUrl = await compressImageBase64(payload.photoDataUrl, 240, 0.4);
+      compressedPhotoUrl = await compressImageBase64(payload.photoDataUrl, 280, 0.4);
     } catch {
-      compressedPhotoUrl = truncateOrDownscaleBase64(payload.photoDataUrl, 35000);
+      compressedPhotoUrl = payload.photoDataUrl;
     }
   } else if (payload.photoDataUrl && payload.photoDataUrl.startsWith("http")) {
     compressedPhotoUrl = payload.photoDataUrl;
   }
 
-  let storageDownloadUrl: string | null = null;
-  let storagePath: string | null = null;
-
   const sessionRef = doc(db, "users", uid, "classSessions", sessionId);
 
-  // Background non-blocking Storage upload attempt (fails gracefully if Storage is unprovisioned)
-  if (payload.photoDataUrl && payload.photoDataUrl.startsWith("data:")) {
-    (async () => {
-      try {
-        const tryPath = `users/${uid}/attendance/${sessionId}/${Date.now()}.jpg`;
-        const storageRef = ref(storage, tryPath);
-        await uploadString(storageRef, payload.photoDataUrl!, "data_url", {
-          contentType: "image/jpeg",
-          customMetadata: {
-            sessionId,
-            studentId: uid,
-            clientCapturedAt: captureTimestamp,
-          },
-        });
-        const url = await getDownloadURL(storageRef);
-        await updateDoc(sessionRef, { evidenceStoragePath: tryPath }).catch(() => {});
-        await updateDoc(doc(db, "users", uid, "evidenceMetadata", `meta-${sessionId}`), {
-          storageUrl: url,
-          storagePath: tryPath,
-        }).catch(() => {});
-      } catch {
-        // Safe to ignore: inline compressed photo is already permanently committed to Firestore
-      }
-    })().catch(() => {});
-  }
-
+  // 2. IMMEDIATE ATOMIC FIRESTORE TRANSACTION (Unblocked by Storage, commits in <50ms):
   const updatedSession = await runTransaction(db, async (transaction) => {
     const sessionSnap = await transaction.get(sessionRef);
     let session: ClassSessionItem;
@@ -1135,13 +1048,11 @@ export async function saveCompleteAttendanceRecord(
     }
 
     const isHistoricalTraining = session.subjectId === PYTHON_TRAINING_SUBJECT.id || (session as any).isSpecialTraining;
-    const isP7TestClass = session.slot === "P7" || session.subjectId === "sub-test-class-p7" || session.subjectCode === "TEST-P7";
 
     // ONLY validate window boundaries when student is actively marking AttendWise Present!
-    // Students can save ERP status, Keynotes, or Camera Photos at ANY time independently without being blocked!
     if (!isHistoricalTraining && payload.personalStatus === "present" && session.personalStatus !== "present") {
       const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" }).format(new Date());
-      if (!isP7TestClass && session.scheduledDate !== today) {
+      if (session.scheduledDate !== today) {
         throw new Error("Attendance can only be marked for today's scheduled classes.");
       }
 
@@ -1166,7 +1077,7 @@ export async function saveCompleteAttendanceRecord(
       }
     }
 
-    // Resolve ERP status locking (independent from AttendWise personal attendance)
+    // Resolve ERP status locking
     let finalErpStatus: "Present" | "Absent" | null = session.erpStatus ?? null;
     let finalErpRecordedAt: string | null = session.erpRecordedAt ?? null;
     if (payload.erpStatus !== undefined && payload.erpStatus !== null) {
@@ -1177,7 +1088,7 @@ export async function saveCompleteAttendanceRecord(
       finalErpRecordedAt = session.erpRecordedAt || receiptAt;
     }
 
-    // Resolve Keynote / Note (independent from ERP and AttendWise personal attendance)
+    // Resolve Keynote / Note
     let finalNote: string | null = session.note ?? null;
     if (payload.note !== undefined && payload.note !== null) {
       const trimmed = payload.note.trim();
@@ -1219,11 +1130,11 @@ export async function saveCompleteAttendanceRecord(
       ? (captureTimestamp || session.clientCaptureAt || receiptAt)
       : (session.clientCaptureAt ?? null);
 
-    const finalPhotoUrl = compressedPhotoUrl || storageDownloadUrl || session.photoDataUrl || null;
-    const finalStoragePath = storagePath || session.evidenceStoragePath || null;
+    const finalPhotoUrl = compressedPhotoUrl || session.photoDataUrl || null;
+    const finalStoragePath = session.evidenceStoragePath || null;
     const hasPhoto = Boolean(finalPhotoUrl || finalStoragePath);
 
-    // Explicitly construct sanitized session object with ZERO undefined properties
+    // Explicitly construct sanitized session object
     const result: ClassSessionItem = {
       ...session,
       id: sessionId,
@@ -1242,9 +1153,6 @@ export async function saveCompleteAttendanceRecord(
       absentType: finalAbsentType,
       finalized: isFinalized,
       finalizedAt: finalFinalizedAt,
-      isFrozen: session.isFrozen ?? false,
-      frozenAt: session.frozenAt ?? null,
-      freezeReason: session.freezeReason ?? null,
       serverReceiptAt: finalServerReceiptAt,
       clientCaptureAt: finalClientCaptureAt,
       evidenceAvailable: hasPhoto,
@@ -1260,7 +1168,7 @@ export async function saveCompleteAttendanceRecord(
 
     transaction.set(sessionRef, result, { merge: true });
 
-    // Record authoritative audit events only for fields that actually changed
+    // Record audit events
     if (payload.personalStatus && payload.personalStatus !== session.personalStatus) {
       const eventRef = doc(db, "users", uid, "attendanceEvents", `event-${sessionId}-${Date.now()}`);
       transaction.set(eventRef, {
@@ -1302,8 +1210,8 @@ export async function saveCompleteAttendanceRecord(
         id: `meta-${sessionId}`,
         sessionId,
         dataUrl: finalPhotoUrl,
-        storageUrl: storageDownloadUrl || null,
-        storagePath: finalStoragePath,
+        storageUrl: null,
+        storagePath: null,
         clientCapturedAt: captureTimestamp,
         uploadedAt: receiptAt,
       });
@@ -1312,29 +1220,26 @@ export async function saveCompleteAttendanceRecord(
     return result;
   });
 
-  // 3. Post-write confirmation check to ensure Cloud Firestore document persistence
-  try {
-    const checkSnap = await getDoc(sessionRef);
-    if (checkSnap.exists()) {
-      const checkData = checkSnap.data() as ClassSessionItem;
-      // If photo was provided in payload but missing on committed server doc, enforce fallback merge set
-      if (
-        updatedSession.photoDataUrl &&
-        (!checkData.photoDataUrl || checkData.photoDataUrl !== updatedSession.photoDataUrl)
-      ) {
-        await setDoc(
-          sessionRef,
-          {
-            photoDataUrl: updatedSession.photoDataUrl,
-            evidenceAvailable: true,
-            evidenceStoragePath: updatedSession.evidenceStoragePath || null,
+  // 3. Optional Background Storage Upload (Non-blocking, never disrupts or reverts the saved attendance record)
+  if (payload.photoDataUrl && payload.photoDataUrl.startsWith("data:")) {
+    (async () => {
+      try {
+        const tryPath = `users/${uid}/attendance/${sessionId}/${Date.now()}.jpg`;
+        const storageRef = ref(storage, tryPath);
+        await uploadString(storageRef, payload.photoDataUrl, "data_url", {
+          contentType: "image/jpeg",
+          customMetadata: {
+            sessionId,
+            studentId: uid,
+            clientCapturedAt: captureTimestamp,
           },
-          { merge: true }
-        );
+        });
+        const downloadUrl = await getDownloadURL(storageRef);
+        await setDoc(sessionRef, { evidenceStoragePath: tryPath, photoDataUrl: downloadUrl }, { merge: true });
+      } catch (storageErr) {
+        console.warn("Background storage upload notice (inline photo is permanently saved in Firestore):", storageErr);
       }
-    }
-  } catch (confirmErr) {
-    console.warn("Post-transaction confirmation check notice (write was already committed):", confirmErr);
+    })();
   }
 
   return {
@@ -1423,9 +1328,8 @@ export async function markSessionAbsent(
     }
 
     const isHistoricalTraining = session.subjectId === PYTHON_TRAINING_SUBJECT.id || (session as any).isSpecialTraining;
-    const isP7TestClass = session.slot === "P7" || session.subjectId === "sub-test-class-p7" || session.subjectCode === "TEST-P7";
 
-    if (!isHistoricalTraining && !isP7TestClass) {
+    if (!isHistoricalTraining) {
       const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" }).format(new Date());
       if (session.scheduledDate !== today) {
         throw new Error("Attendance can only be marked for today's scheduled classes.");
@@ -1613,9 +1517,9 @@ export async function finalizeExpiredSessionsForStudent(
 
         // CRITICAL INVARIANT: Never overwrite Present, Frozen, Cancelled, or already finalized records!
         if (
-          isSessionFrozen(currentData) ||
           currentData.personalStatus === "present" ||
           currentData.finalized ||
+          currentData.personalStatus === "frozen" ||
           currentData.personalStatus === "cancelled" ||
           currentData.personalStatus === "absent"
         ) {
@@ -1649,13 +1553,11 @@ export async function finalizeExpiredSessionsForStudent(
 }
 
 import { getCachedStore, setCachedStore } from "./idb-cache";
-import { computeFullAnalytics, isSessionEligible, isSessionFrozen } from "./analytics-calculator";
-export { isSessionFrozen };
+import { computeFullAnalytics, isSessionEligible } from "./analytics-calculator";
 
 // Freeze class session (excluded from all attendance calculations and denominators)
-export async function freezeClassSession(uid: string, sessionId: string, reason?: string): Promise<void> {
+export async function freezeClassSession(uid: string, sessionId: string): Promise<void> {
   const now = new Date().toISOString();
-  const cleanReason = reason?.trim() || "Class session frozen by student";
 
   // 1. Persist to Firestore if online & authenticated
   if (auth.currentUser && !uid.startsWith("local-")) {
@@ -1663,12 +1565,13 @@ export async function freezeClassSession(uid: string, sessionId: string, reason?
       const sessionRef = doc(db, "users", uid, "classSessions", sessionId);
       const sessionSnap = await getDoc(sessionRef);
       const prevData = sessionSnap.exists() ? (sessionSnap.data() as ClassSessionItem) : null;
+      const prevStatus = prevData?.personalStatus !== "frozen" ? prevData?.personalStatus : "absent";
+      const prevErp = prevData?.erpStatus ?? null;
 
-      let baseSession: ClassSessionItem;
       if (!sessionSnap.exists()) {
         const defaultData = buildDefaultSistecData(uid);
         const found = defaultData.sessions.find((s) => s.id === sessionId);
-        baseSession = found || {
+        const baseSession = found || {
           id: sessionId,
           studentId: uid,
           subjectId: "sub-unknown",
@@ -1685,39 +1588,32 @@ export async function freezeClassSession(uid: string, sessionId: string, reason?
           finalized: false,
           createdAt: now,
         };
+
+        await setDoc(sessionRef, {
+          ...baseSession,
+          personalStatus: "frozen",
+          finalized: true,
+          frozenAt: now,
+          finalizedAt: now,
+          previousPersonalStatus: prevStatus,
+          previousErpStatus: prevErp,
+          updatedAt: now,
+        });
       } else {
-        baseSession = prevData!;
+        await setDoc(
+          sessionRef,
+          {
+            personalStatus: "frozen",
+            finalized: true,
+            frozenAt: now,
+            finalizedAt: now,
+            previousPersonalStatus: prevStatus,
+            previousErpStatus: prevErp,
+            updatedAt: now,
+          },
+          { merge: true }
+        );
       }
-
-      const prevPersonal = baseSession.personalStatus;
-      const prevErp = baseSession.erpStatus ?? null;
-
-      // Firestore Security Rule compatibility:
-      // If the session was already recorded as Present, the security rule requires:
-      // request.resource.data.personalStatus == 'present'
-      // If we attempt to set personalStatus: 'frozen', Firestore returns 7 PERMISSION_DENIED!
-      // Therefore, if it was 'present', we KEEP personalStatus: 'present', and set isFrozen: true,
-      // frozenAt: now, freezeReason: cleanReason.
-      // If it was not 'present', we set personalStatus: 'frozen', isFrozen: true, frozenAt: now.
-      const targetPersonalStatus = prevPersonal === "present" ? "present" : "frozen";
-
-      const freezePayload: Record<string, any> = {
-        personalStatus: targetPersonalStatus,
-        isFrozen: true,
-        frozenAt: now,
-        freezeReason: cleanReason,
-        finalized: true,
-        finalizedAt: baseSession.finalizedAt || now,
-        previousPersonalStatus: prevPersonal !== "frozen" ? prevPersonal : "absent",
-        previousErpStatus: prevErp,
-        updatedAt: now,
-      };
-
-      if (prevErp !== null && prevErp !== undefined) {
-        freezePayload.erpStatus = prevErp;
-      }
-
-      await setDoc(sessionRef, freezePayload, { merge: true });
 
       const eventRef = doc(db, "users", uid, "attendanceEvents", `event-freeze-${sessionId}-${Date.now()}`);
       await setDoc(eventRef, {
@@ -1725,14 +1621,13 @@ export async function freezeClassSession(uid: string, sessionId: string, reason?
         sessionId,
         eventType: "session_frozen",
         serverTimestamp: now,
-        message: `Class session frozen (${cleanReason}) and excluded from all attendance calculations.`,
+        message: "Class session frozen and excluded from all attendance calculations.",
       });
     } catch (e) {
-      console.error("Firestore update error in freezeClassSession:", e);
+      console.warn("Firestore update error in freezeClassSession:", e);
       if (auth.currentUser && auth.currentUser.uid === uid) {
         handleFirestoreError(e, OperationType.WRITE, `users/${uid}/classSessions/${sessionId}`);
       }
-      throw e;
     }
   }
 
@@ -1744,12 +1639,10 @@ export async function freezeClassSession(uid: string, sessionId: string, reason?
         s.id === sessionId
           ? {
               ...s,
-              personalStatus: s.personalStatus === "present" ? ("present" as const) : ("frozen" as const),
-              isFrozen: true,
+              personalStatus: "frozen" as const,
               finalized: true,
               frozenAt: now,
-              freezeReason: cleanReason,
-              finalizedAt: s.finalizedAt || now,
+              finalizedAt: now,
               previousPersonalStatus: s.personalStatus !== "frozen" ? s.personalStatus : "absent",
               previousErpStatus: s.erpStatus ?? null,
             }
@@ -1782,9 +1675,7 @@ export async function unfreezeClassSession(uid: string, sessionId: string): Prom
         sessionRef,
         {
           personalStatus: restoredStatus,
-          isFrozen: false,
           frozenAt: null,
-          freezeReason: null,
           finalized: true,
           finalizedAt: sessionData?.finalizedAt || now,
           updatedAt: now,
@@ -1801,11 +1692,10 @@ export async function unfreezeClassSession(uid: string, sessionId: string): Prom
         message: `Class session unfrozen and restored to calculations as ${restoredStatus}.`,
       });
     } catch (e) {
-      console.error("Firestore update error in unfreezeClassSession:", e);
+      console.warn("Firestore update error in unfreezeClassSession:", e);
       if (auth.currentUser && auth.currentUser.uid === uid) {
         handleFirestoreError(e, OperationType.WRITE, `users/${uid}/classSessions/${sessionId}`);
       }
-      throw e;
     }
   }
 
@@ -1819,9 +1709,7 @@ export async function unfreezeClassSession(uid: string, sessionId: string): Prom
         return {
           ...s,
           personalStatus: restoredStatus as any,
-          isFrozen: false,
           frozenAt: null,
-          freezeReason: null,
           finalized: true,
         };
       });
@@ -1920,5 +1808,81 @@ export function syncSessionsForDate(dateKey: string, isWorking: boolean) {
   } catch (err) {
     console.error("Error syncing sessions for date:", err);
   }
+}
+
+// Completely purge all Period 7 (P7) Test Class sessions and subject documents from Cloud Firestore and local storage caches
+export async function purgeP7TestClass(uid: string): Promise<void> {
+  if (!uid) return;
+
+  // 1. Purge from Cloud Firestore if authenticated
+  if (auth.currentUser && !uid.startsWith("local-")) {
+    try {
+      const sessionsRef = collection(db, "users", uid, "classSessions");
+      const sessionsSnap = await getDocs(sessionsRef);
+      const batch = writeBatch(db);
+      let opCount = 0;
+
+      sessionsSnap.forEach((d) => {
+        const data = d.data() as ClassSessionItem;
+        if (
+          data.slot === "P7" ||
+          data.subjectId === "sub-test-class-p7" ||
+          data.subjectCode === "TEST-P7" ||
+          d.id.includes("test-class-p7") ||
+          d.id.includes("P7")
+        ) {
+          batch.delete(d.ref);
+          opCount++;
+        }
+      });
+
+      // Also delete the subject document if present
+      const subjectDocRef = doc(db, "users", uid, "subjects", "sub-test-class-p7");
+      batch.delete(subjectDocRef);
+      opCount++;
+
+      if (opCount > 0) {
+        await batch.commit();
+      }
+    } catch (e) {
+      console.warn("Notice: P7 Firestore cleanup:", e);
+    }
+  }
+
+  // 2. Purge from IndexedDB local cache
+  try {
+    const cachedSessions = await getCachedStore<ClassSessionItem>("sessions");
+    if (cachedSessions && cachedSessions.length > 0) {
+      const cleaned = cachedSessions.filter(
+        (s) =>
+          s.slot !== "P7" &&
+          s.subjectId !== "sub-test-class-p7" &&
+          s.subjectCode !== "TEST-P7" &&
+          !s.id.includes("test-class-p7")
+      );
+      await setCachedStore("sessions", cleaned);
+    }
+  } catch (err) {
+    console.warn("Notice: P7 IDB cleanup:", err);
+  }
+
+  // 3. Purge from localStorage
+  try {
+    const localStoreKey = `attendwise_student_sessions_${uid}`;
+    const stored = localStorage.getItem(localStoreKey);
+    if (stored) {
+      const parsed = JSON.parse(stored) as Record<string, Partial<ClassSessionItem>>;
+      let modified = false;
+      for (const k of Object.keys(parsed)) {
+        if (k.includes("test-class-p7") || k.includes("P7")) {
+          delete parsed[k];
+          modified = true;
+        }
+      }
+      if (modified) {
+        localStorage.setItem(localStoreKey, JSON.stringify(parsed));
+      }
+    }
+  } catch {}
 }
 
