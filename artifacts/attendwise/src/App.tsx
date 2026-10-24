@@ -1158,7 +1158,7 @@ function AttendanceCardDialog({
   onRecordErp?: (sessionId: string, status: "Present" | "Absent") => Promise<void>;
   onMarkPresent?: (sessionId: string, photoUrl?: string, note?: string, capturedAt?: string) => Promise<void>;
   onMarkAbsent?: (sessionId: string, note?: string) => Promise<void>;
-  onFreezeClass?: (sessionId: string) => Promise<void>;
+  onFreezeClass?: (sessionId: string, photoDataUrl?: string | null) => Promise<void>;
   onSaveCompleteAttendance?: (sessionId: string, payload: CompleteAttendancePayload) => Promise<void>;
 }) {
   // Always derive the most authoritative, live session state from the parent sessions listener
@@ -1581,6 +1581,25 @@ function AttendanceCardDialog({
                   <Lock className="h-3.5 w-3.5" />
                   <span>Permanent & Immutable · No further attendance or ERP changes allowed</span>
                 </div>
+                {(session.photoDataUrl || evidencePhotoUrl || session.evidenceAvailable) && (
+                  <div className="space-y-1.5 pt-2 border-t border-sky-200/60 dark:border-sky-800/60">
+                    <div className="flex items-center justify-between text-[11px] font-medium text-sky-800 dark:text-sky-200">
+                      <span className="flex items-center gap-1.5">
+                        <Camera className="h-3.5 w-3.5" /> Attached Photo Evidence (Preserved):
+                      </span>
+                      {(session.clientCaptureAt || session.serverReceiptAt) && (
+                        <span className="text-[10px] text-muted-foreground font-mono">
+                          Captured: {formatClock(session.clientCaptureAt || session.serverReceiptAt!)} IST
+                        </span>
+                      )}
+                    </div>
+                    <img
+                      src={session.photoDataUrl || evidencePhotoUrl || ""}
+                      alt="Captured live proof"
+                      className="w-full h-40 object-cover rounded-md border"
+                    />
+                  </div>
+                )}
               </div>
             ) : session.personalStatus === "present" ? (
               <div className="rounded-lg bg-emerald-50/60 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800 p-3.5 text-xs space-y-2.5">
@@ -1890,10 +1909,11 @@ function AttendanceCardDialog({
                         setError(null);
                         try {
                           setStagedPersonalStatus("frozen");
+                          const photoToKeep = capturedPhotoUrl || session.photoDataUrl || null;
                           if (onFreezeClass) {
-                            await onFreezeClass(session.id);
+                            await onFreezeClass(session.id, photoToKeep);
                           } else {
-                            await freezeClassSession(user.uid, session.id);
+                            await freezeClassSession(user.uid, session.id, photoToKeep);
                           }
                           setNotice("Class successfully frozen and permanently removed from all calculations.");
                           setConfirmFreeze(false);
@@ -5262,8 +5282,12 @@ export default function App() {
     }
   };
 
-  const handleFreezeClassQuick = async (sessionId: string) => {
+  const handleFreezeClassQuick = async (sessionId: string, photoDataUrl?: string | null) => {
     const nowIso = new Date().toISOString();
+    const prevSession = sessions.find((s) => s.id === sessionId);
+    const effectivePhoto = photoDataUrl || prevSession?.photoDataUrl || null;
+    const hasPhoto = Boolean(effectivePhoto || prevSession?.evidenceAvailable || prevSession?.evidenceStoragePath);
+
     setSessions((prev) => {
       const updated = prev.map((s) =>
         s.id === sessionId
@@ -5273,34 +5297,62 @@ export default function App() {
               finalized: true,
               frozenAt: nowIso,
               finalizedAt: nowIso,
-              previousPersonalStatus: s.personalStatus !== "frozen" ? s.personalStatus : "absent",
-              previousErpStatus: s.erpStatus ?? null,
+              previousPersonalStatus: s.personalStatus !== "frozen" ? s.personalStatus : (s.previousPersonalStatus || "absent"),
+              previousErpStatus: s.erpStatus ?? s.previousErpStatus ?? null,
+              photoDataUrl: effectivePhoto || s.photoDataUrl,
+              evidenceAvailable: hasPhoto,
             }
           : s
       );
       void setCachedStore("sessions", updated).catch(() => {});
       return updated;
     });
-    const currentS = sessions.find((s) => s.id === sessionId);
+
     persistLocalSessionOverride(sessionId, {
       personalStatus: "frozen",
       finalized: true,
       frozenAt: nowIso,
       finalizedAt: nowIso,
-      previousPersonalStatus: currentS && currentS.personalStatus !== "frozen" ? currentS.personalStatus : "absent",
-      previousErpStatus: currentS?.erpStatus ?? null,
+      previousPersonalStatus: prevSession && prevSession.personalStatus !== "frozen" ? prevSession.personalStatus : "absent",
+      previousErpStatus: prevSession?.erpStatus ?? null,
+      photoDataUrl: effectivePhoto || prevSession?.photoDataUrl,
+      evidenceAvailable: hasPhoto,
     });
-    if (user) {
-      await freezeClassSession(user.uid, sessionId);
+
+    try {
+      if (user) {
+        const res = await freezeClassSession(user.uid, sessionId, effectivePhoto);
+        if (res?.session) {
+          setSessions((prev) => {
+            const confirmed = prev.map((s) => s.id === sessionId ? { ...s, ...res.session } : s);
+            void setCachedStore("sessions", confirmed).catch(() => {});
+            return confirmed;
+          });
+          persistLocalSessionOverride(sessionId, res.session);
+        }
+      }
+    } catch (err) {
+      if (prevSession) {
+        setSessions((prev) => {
+          const reverted = prev.map((s) => (s.id === sessionId ? prevSession : s));
+          void setCachedStore("sessions", reverted).catch(() => {});
+          return reverted;
+        });
+        persistLocalSessionOverride(sessionId, prevSession);
+      }
+      throw err;
     }
   };
 
   const handleUnfreezeClassQuick = async (sessionId: string) => {
+    const prevSession = sessions.find((s) => s.id === sessionId);
+    const restoredStatus =
+      (prevSession as any)?.previousPersonalStatus === "present" ? "present" : "absent";
+    const nowIso = new Date().toISOString();
+
     setSessions((prev) => {
       const updated = prev.map((s) => {
         if (s.id !== sessionId) return s;
-        const restoredStatus =
-          (s as any).previousPersonalStatus === "present" ? "present" : "absent";
         return {
           ...s,
           personalStatus: restoredStatus as const,
@@ -5311,13 +5363,35 @@ export default function App() {
       void setCachedStore("sessions", updated).catch(() => {});
       return updated;
     });
+
     persistLocalSessionOverride(sessionId, {
-      personalStatus: "absent",
+      personalStatus: restoredStatus,
       frozenAt: null,
       finalized: true,
     });
-    if (user) {
-      await unfreezeClassSession(user.uid, sessionId);
+
+    try {
+      if (user) {
+        const res = await unfreezeClassSession(user.uid, sessionId);
+        if (res?.session) {
+          setSessions((prev) => {
+            const confirmed = prev.map((s) => (s.id === sessionId ? { ...s, ...res.session } : s));
+            void setCachedStore("sessions", confirmed).catch(() => {});
+            return confirmed;
+          });
+          persistLocalSessionOverride(sessionId, res.session);
+        }
+      }
+    } catch (err) {
+      if (prevSession) {
+        setSessions((prev) => {
+          const reverted = prev.map((s) => (s.id === sessionId ? prevSession : s));
+          void setCachedStore("sessions", reverted).catch(() => {});
+          return reverted;
+        });
+        persistLocalSessionOverride(sessionId, prevSession);
+      }
+      throw err;
     }
   };
 

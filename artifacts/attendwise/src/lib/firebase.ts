@@ -1556,75 +1556,109 @@ import { getCachedStore, setCachedStore } from "./idb-cache";
 import { computeFullAnalytics, isSessionEligible } from "./analytics-calculator";
 
 // Freeze class session (excluded from all attendance calculations and denominators)
-export async function freezeClassSession(uid: string, sessionId: string): Promise<void> {
+export async function freezeClassSession(
+  uid: string,
+  sessionId: string,
+  photoDataUrl?: string | null
+): Promise<{ success: boolean; session: ClassSessionItem }> {
   const now = new Date().toISOString();
+  let compressedPhotoUrl: string | null = null;
+  if (photoDataUrl && photoDataUrl.startsWith("data:")) {
+    try {
+      compressedPhotoUrl = await compressImageBase64(photoDataUrl, 280, 0.4);
+    } catch {
+      compressedPhotoUrl = photoDataUrl;
+    }
+  } else if (photoDataUrl && photoDataUrl.startsWith("http")) {
+    compressedPhotoUrl = photoDataUrl;
+  }
 
-  // 1. Persist to Firestore if online & authenticated
+  let finalSession: ClassSessionItem | null = null;
+
+  // 1. Atomic Firestore transaction: safely freezes the session while preserving or attaching photo evidence
   if (auth.currentUser && !uid.startsWith("local-")) {
     try {
       const sessionRef = doc(db, "users", uid, "classSessions", sessionId);
-      const sessionSnap = await getDoc(sessionRef);
-      const prevData = sessionSnap.exists() ? (sessionSnap.data() as ClassSessionItem) : null;
-      const prevStatus = prevData?.personalStatus !== "frozen" ? prevData?.personalStatus : "absent";
-      const prevErp = prevData?.erpStatus ?? null;
+      finalSession = await runTransaction(db, async (transaction) => {
+        const sessionSnap = await transaction.get(sessionRef);
+        let session: ClassSessionItem;
 
-      if (!sessionSnap.exists()) {
-        const defaultData = buildDefaultSistecData(uid);
-        const found = defaultData.sessions.find((s) => s.id === sessionId);
-        const baseSession = found || {
-          id: sessionId,
-          studentId: uid,
-          subjectId: "sub-unknown",
-          subjectName: "Subject",
-          subjectCode: "CODE",
-          timetableEntryId: null,
-          slot: "P1",
-          scheduledDate: formatDateKey(new Date()),
-          scheduledStartAt: now,
-          scheduledEndAt: now,
-          category: "Theory",
-          personalStatus: "unmarked",
-          erpStatus: null,
-          finalized: false,
-          createdAt: now,
-        };
+        if (!sessionSnap.exists()) {
+          const defaultData = buildDefaultSistecData(uid);
+          const found = defaultData.sessions.find((s) => s.id === sessionId);
+          session = found || {
+            id: sessionId,
+            studentId: uid,
+            subjectId: "sub-unknown",
+            subjectName: "Subject",
+            subjectCode: "CODE",
+            timetableEntryId: null,
+            slot: "P1",
+            scheduledDate: formatDateKey(new Date()),
+            scheduledStartAt: now,
+            scheduledEndAt: now,
+            category: "Theory",
+            personalStatus: "unmarked",
+            erpStatus: null,
+            finalized: false,
+            createdAt: now,
+          };
+        } else {
+          session = sessionSnap.data() as ClassSessionItem;
+        }
 
-        await setDoc(sessionRef, {
-          ...baseSession,
+        const prevStatus = session.personalStatus !== "frozen"
+          ? session.personalStatus
+          : (session.previousPersonalStatus || "absent");
+        const prevErp = session.erpStatus ?? session.previousErpStatus ?? null;
+
+        const effectivePhoto = compressedPhotoUrl || session.photoDataUrl || null;
+        const effectiveStoragePath = session.evidenceStoragePath || null;
+        const hasPhoto = Boolean(effectivePhoto || effectiveStoragePath || session.evidenceAvailable);
+
+        const updated: ClassSessionItem = {
+          ...session,
           personalStatus: "frozen",
           finalized: true,
-          frozenAt: now,
-          finalizedAt: now,
+          frozenAt: session.frozenAt || now,
+          finalizedAt: session.finalizedAt || now,
           previousPersonalStatus: prevStatus,
           previousErpStatus: prevErp,
+          photoDataUrl: effectivePhoto,
+          evidenceStoragePath: effectiveStoragePath,
+          evidenceAvailable: hasPhoto,
+          clientCaptureAt: session.clientCaptureAt || (effectivePhoto ? now : null),
           updatedAt: now,
-        });
-      } else {
-        await setDoc(
-          sessionRef,
-          {
-            personalStatus: "frozen",
-            finalized: true,
-            frozenAt: now,
-            finalizedAt: now,
-            previousPersonalStatus: prevStatus,
-            previousErpStatus: prevErp,
-            updatedAt: now,
-          },
-          { merge: true }
-        );
-      }
+        };
 
-      const eventRef = doc(db, "users", uid, "attendanceEvents", `event-freeze-${sessionId}-${Date.now()}`);
-      await setDoc(eventRef, {
-        id: `event-freeze-${sessionId}-${Date.now()}`,
-        sessionId,
-        eventType: "session_frozen",
-        serverTimestamp: now,
-        message: "Class session frozen and excluded from all attendance calculations.",
+        transaction.set(sessionRef, updated, { merge: true });
+
+        const eventRef = doc(db, "users", uid, "attendanceEvents", `event-freeze-${sessionId}-${Date.now()}`);
+        transaction.set(eventRef, {
+          id: `event-freeze-${sessionId}-${Date.now()}`,
+          sessionId,
+          eventType: "session_frozen",
+          serverTimestamp: now,
+          message: `Class session frozen and excluded from all attendance calculations.${hasPhoto ? " Photo evidence preserved." : ""}`,
+        });
+
+        if (effectivePhoto && (!session.photoDataUrl || session.photoDataUrl !== effectivePhoto)) {
+          const metaRef = doc(db, "users", uid, "evidenceMetadata", `meta-${sessionId}`);
+          transaction.set(metaRef, {
+            id: `meta-${sessionId}`,
+            sessionId,
+            dataUrl: effectivePhoto,
+            storageUrl: null,
+            storagePath: null,
+            clientCapturedAt: updated.clientCaptureAt || now,
+            uploadedAt: now,
+          }, { merge: true });
+        }
+
+        return updated;
       });
     } catch (e) {
-      console.warn("Firestore update error in freezeClassSession:", e);
+      console.warn("Firestore transaction error in freezeClassSession:", e);
       if (auth.currentUser && auth.currentUser.uid === uid) {
         handleFirestoreError(e, OperationType.WRITE, `users/${uid}/classSessions/${sessionId}`);
       }
@@ -1635,61 +1669,92 @@ export async function freezeClassSession(uid: string, sessionId: string): Promis
   try {
     const cachedSessions = await getCachedStore<ClassSessionItem>("sessions");
     if (cachedSessions && cachedSessions.length > 0) {
-      const updated = cachedSessions.map((s) =>
-        s.id === sessionId
-          ? {
-              ...s,
-              personalStatus: "frozen" as const,
-              finalized: true,
-              frozenAt: now,
-              finalizedAt: now,
-              previousPersonalStatus: s.personalStatus !== "frozen" ? s.personalStatus : "absent",
-              previousErpStatus: s.erpStatus ?? null,
-            }
-          : s
-      );
+      const updated = cachedSessions.map((s) => {
+        if (s.id !== sessionId) return s;
+        const effectivePhoto = compressedPhotoUrl || s.photoDataUrl || null;
+        return {
+          ...s,
+          ...(finalSession || {}),
+          personalStatus: "frozen" as const,
+          finalized: true,
+          frozenAt: s.frozenAt || now,
+          finalizedAt: s.finalizedAt || now,
+          previousPersonalStatus: s.personalStatus !== "frozen" ? s.personalStatus : (s.previousPersonalStatus || "absent"),
+          previousErpStatus: s.erpStatus ?? s.previousErpStatus ?? null,
+          photoDataUrl: effectivePhoto,
+          evidenceAvailable: Boolean(effectivePhoto || s.evidenceStoragePath || s.evidenceAvailable),
+        };
+      });
       await setCachedStore("sessions", updated);
     }
   } catch (err) {
     console.warn("IDB cache update error in freezeClassSession:", err);
   }
+
+  const fallbackResult: ClassSessionItem = finalSession || {
+    id: sessionId,
+    studentId: uid,
+    subjectId: "sub-unknown",
+    subjectName: "Subject",
+    subjectCode: "CODE",
+    timetableEntryId: null,
+    scheduledDate: formatDateKey(new Date()),
+    scheduledStartAt: now,
+    scheduledEndAt: now,
+    category: "Theory",
+    personalStatus: "frozen",
+    erpStatus: null,
+    finalized: true,
+    frozenAt: now,
+    finalizedAt: now,
+    previousPersonalStatus: "absent",
+    previousErpStatus: null,
+    photoDataUrl: compressedPhotoUrl,
+    evidenceAvailable: Boolean(compressedPhotoUrl),
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  return { success: true, session: fallbackResult };
 }
 
 // Unfreeze class session (restores class to eligible calculations with original state preserved)
-export async function unfreezeClassSession(uid: string, sessionId: string): Promise<void> {
+export async function unfreezeClassSession(uid: string, sessionId: string): Promise<{ success: boolean; session: ClassSessionItem }> {
   const now = new Date().toISOString();
+  let finalSession: ClassSessionItem | null = null;
 
   if (auth.currentUser && !uid.startsWith("local-")) {
     try {
       const sessionRef = doc(db, "users", uid, "classSessions", sessionId);
-      const sessionSnap = await getDoc(sessionRef);
-      const sessionData = sessionSnap.exists() ? (sessionSnap.data() as ClassSessionItem) : null;
+      finalSession = await runTransaction(db, async (transaction) => {
+        const snap = await transaction.get(sessionRef);
+        if (!snap.exists()) {
+          throw new Error("Class session not found.");
+        }
+        const sessionData = snap.data() as ClassSessionItem;
+        const restoredStatus = sessionData.previousPersonalStatus === "present" ? "present" : "absent";
 
-      // Restore to previous personal status, default to absent if class has already passed
-      const restoredStatus =
-        sessionData?.previousPersonalStatus === "present"
-          ? "present"
-          : "absent";
-
-      await setDoc(
-        sessionRef,
-        {
-          personalStatus: restoredStatus,
+        const restoredSession: ClassSessionItem = {
+          ...sessionData,
+          personalStatus: restoredStatus as any,
           frozenAt: null,
           finalized: true,
-          finalizedAt: sessionData?.finalizedAt || now,
+          finalizedAt: sessionData.finalizedAt || now,
           updatedAt: now,
-        },
-        { merge: true }
-      );
+        };
 
-      const eventRef = doc(db, "users", uid, "attendanceEvents", `event-unfreeze-${sessionId}-${Date.now()}`);
-      await setDoc(eventRef, {
-        id: `event-unfreeze-${sessionId}-${Date.now()}`,
-        sessionId,
-        eventType: "session_unfrozen",
-        serverTimestamp: now,
-        message: `Class session unfrozen and restored to calculations as ${restoredStatus}.`,
+        transaction.set(sessionRef, restoredSession, { merge: true });
+
+        const eventRef = doc(db, "users", uid, "attendanceEvents", `event-unfreeze-${sessionId}-${Date.now()}`);
+        transaction.set(eventRef, {
+          id: `event-unfreeze-${sessionId}-${Date.now()}`,
+          sessionId,
+          eventType: "session_unfrozen",
+          serverTimestamp: now,
+          message: `Class session unfrozen and restored to calculations as ${restoredStatus}.`,
+        });
+
+        return restoredSession;
       });
     } catch (e) {
       console.warn("Firestore update error in unfreezeClassSession:", e);
@@ -1708,6 +1773,7 @@ export async function unfreezeClassSession(uid: string, sessionId: string): Prom
           (s as any).previousPersonalStatus === "present" ? "present" : "absent";
         return {
           ...s,
+          ...(finalSession || {}),
           personalStatus: restoredStatus as any,
           frozenAt: null,
           finalized: true,
@@ -1718,6 +1784,8 @@ export async function unfreezeClassSession(uid: string, sessionId: string): Prom
   } catch (err) {
     console.warn("IDB cache update error in unfreezeClassSession:", err);
   }
+
+  return { success: true, session: finalSession! };
 }
 
 // Attendance calculations adhering strictly to Part 4, 5, 6, 7 & 10:
