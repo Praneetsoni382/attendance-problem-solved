@@ -2324,13 +2324,23 @@ function Dashboard({
   const [filters, setFilters] = useState(() => {
     try {
       const saved = sessionStorage.getItem("attendwise_dashboard_history_filters");
-      if (saved) return JSON.parse(saved);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        return {
+          subjectId: parsed.subjectId || "",
+          category: parsed.category || "",
+          personalStatus: parsed.personalStatus || "",
+          erpStatus: parsed.erpStatus ?? parsed.comparisonStatus ?? "",
+          from: parsed.from || "",
+          to: parsed.to || "",
+        };
+      }
     } catch {}
     return {
       subjectId: "",
       category: "",
       personalStatus: "",
-      comparisonStatus: "",
+      erpStatus: "",
       from: "",
       to: "",
     };
@@ -2353,7 +2363,7 @@ function Dashboard({
       subjectId: "",
       category: "",
       personalStatus: "",
-      comparisonStatus: "",
+      erpStatus: "",
       from: "",
       to: "",
     });
@@ -2411,15 +2421,13 @@ function Dashboard({
       }
       if (filters.from && s.scheduledDate < filters.from) return false;
       if (filters.to && s.scheduledDate > filters.to) return false;
-      if (filters.comparisonStatus) {
-        if (filters.comparisonStatus === "erp_not_entered" && s.erpStatus !== null) return false;
-        if (filters.comparisonStatus === "match") {
-          const personal = s.personalStatus === "present" ? "Present" : "Absent";
-          if (s.erpStatus !== personal) return false;
-        }
-        if (filters.comparisonStatus === "potential_discrepancy") {
-          const personal = s.personalStatus === "present" ? "Present" : "Absent";
-          if (!s.erpStatus || s.erpStatus === personal) return false;
+      if (filters.erpStatus) {
+        if (filters.erpStatus === "not_entered") {
+          if (s.erpStatus !== null && s.erpStatus !== undefined && s.erpStatus !== "") return false;
+        } else if (filters.erpStatus === "Present") {
+          if (s.erpStatus !== "Present") return false;
+        } else if (filters.erpStatus === "Absent") {
+          if (s.erpStatus !== "Absent") return false;
         }
       }
       return true;
@@ -2435,7 +2443,7 @@ function Dashboard({
     filters.subjectId ||
     filters.category ||
     filters.personalStatus ||
-    filters.comparisonStatus ||
+    filters.erpStatus ||
     filters.from ||
     filters.to
   );
@@ -2452,10 +2460,10 @@ function Dashboard({
       else if (filters.personalStatus === "frozen") parts.push("Frozen");
       else parts.push(filters.personalStatus);
     }
-    if (filters.comparisonStatus) {
-      if (filters.comparisonStatus === "match") parts.push("ERP Match");
-      else if (filters.comparisonStatus === "potential_discrepancy") parts.push("Discrepancy");
-      else if (filters.comparisonStatus === "erp_not_entered") parts.push("ERP Not Entered");
+    if (filters.erpStatus) {
+      if (filters.erpStatus === "Present") parts.push("ERP Present");
+      else if (filters.erpStatus === "Absent") parts.push("ERP Absent");
+      else if (filters.erpStatus === "not_entered") parts.push("ERP Not Entered");
     }
     if (filters.from && filters.to) {
       parts.push(`${formatDate(filters.from)} to ${formatDate(filters.to)}`);
@@ -2773,19 +2781,19 @@ function Dashboard({
             </div>
 
             <div className="space-y-1">
-              <Label htmlFor="dh-comp" className="text-xs">ERP Comparison</Label>
+              <Label htmlFor="dh-erp-status" className="text-xs">ERP Status</Label>
               <Select
-                value={filters.comparisonStatus || "all"}
-                onValueChange={(v) => patchFilter("comparisonStatus", v === "all" ? "" : v)}
+                value={filters.erpStatus || "all"}
+                onValueChange={(v) => patchFilter("erpStatus", v === "all" ? "" : v)}
               >
-                <SelectTrigger id="dh-comp" className="h-8 text-xs bg-background">
+                <SelectTrigger id="dh-erp-status" className="h-8 text-xs bg-background">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="all">All Comparisons</SelectItem>
-                  <SelectItem value="match">Match</SelectItem>
-                  <SelectItem value="potential_discrepancy">Potential Discrepancy</SelectItem>
-                  <SelectItem value="erp_not_entered">ERP Not Entered</SelectItem>
+                  <SelectItem value="all">All ERP Statuses</SelectItem>
+                  <SelectItem value="Present">ERP Present</SelectItem>
+                  <SelectItem value="Absent">ERP Absent</SelectItem>
+                  <SelectItem value="not_entered">ERP Not Entered</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -3412,13 +3420,23 @@ function AttendanceHistory({
   const [filters, setFilters] = useState(() => {
     try {
       const saved = sessionStorage.getItem("attendwise_history_filters");
-      if (saved) return JSON.parse(saved);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        return {
+          subjectId: parsed.subjectId || "",
+          category: parsed.category || "",
+          personalStatus: parsed.personalStatus || "",
+          erpStatus: parsed.erpStatus ?? parsed.comparisonStatus ?? "",
+          from: parsed.from || "",
+          to: parsed.to || "",
+        };
+      }
     } catch {}
     return {
       subjectId: "",
       category: "",
       personalStatus: "",
-      comparisonStatus: "",
+      erpStatus: "",
       from: "",
       to: "",
     };
@@ -3441,7 +3459,7 @@ function AttendanceHistory({
       subjectId: "",
       category: "",
       personalStatus: "",
-      comparisonStatus: "",
+      erpStatus: "",
       from: "",
       to: "",
     });
@@ -3474,15 +3492,13 @@ function AttendanceHistory({
       }
       if (filters.from && s.scheduledDate < filters.from) return false;
       if (filters.to && s.scheduledDate > filters.to) return false;
-      if (filters.comparisonStatus) {
-        if (filters.comparisonStatus === "erp_not_entered" && s.erpStatus !== null) return false;
-        if (filters.comparisonStatus === "match") {
-          const personal = s.personalStatus === "present" ? "Present" : "Absent";
-          if (s.erpStatus !== personal) return false;
-        }
-        if (filters.comparisonStatus === "potential_discrepancy") {
-          const personal = s.personalStatus === "present" ? "Present" : "Absent";
-          if (!s.erpStatus || s.erpStatus === personal) return false;
+      if (filters.erpStatus) {
+        if (filters.erpStatus === "not_entered") {
+          if (s.erpStatus !== null && s.erpStatus !== undefined && s.erpStatus !== "") return false;
+        } else if (filters.erpStatus === "Present") {
+          if (s.erpStatus !== "Present") return false;
+        } else if (filters.erpStatus === "Absent") {
+          if (s.erpStatus !== "Absent") return false;
         }
       }
       return true;
@@ -3493,7 +3509,7 @@ function AttendanceHistory({
     filters.subjectId ||
     filters.category ||
     filters.personalStatus ||
-    filters.comparisonStatus ||
+    filters.erpStatus ||
     filters.from ||
     filters.to
   );
@@ -3510,10 +3526,10 @@ function AttendanceHistory({
       else if (filters.personalStatus === "frozen") parts.push("Frozen");
       else parts.push(filters.personalStatus);
     }
-    if (filters.comparisonStatus) {
-      if (filters.comparisonStatus === "match") parts.push("ERP Match");
-      else if (filters.comparisonStatus === "potential_discrepancy") parts.push("Discrepancy");
-      else if (filters.comparisonStatus === "erp_not_entered") parts.push("ERP Not Entered");
+    if (filters.erpStatus) {
+      if (filters.erpStatus === "Present") parts.push("ERP Present");
+      else if (filters.erpStatus === "Absent") parts.push("ERP Absent");
+      else if (filters.erpStatus === "not_entered") parts.push("ERP Not Entered");
     }
     if (filters.from && filters.to) {
       parts.push(`${formatDate(filters.from)} to ${formatDate(filters.to)}`);
@@ -3594,19 +3610,19 @@ function AttendanceHistory({
           </div>
 
           <div className="space-y-1">
-            <Label htmlFor="f-comp" className="text-xs">ERP Comparison</Label>
+            <Label htmlFor="f-erp-status" className="text-xs">ERP Status</Label>
             <Select
-              value={filters.comparisonStatus || "all"}
-              onValueChange={(v) => patch("comparisonStatus", v === "all" ? "" : v)}
+              value={filters.erpStatus || "all"}
+              onValueChange={(v) => patch("erpStatus", v === "all" ? "" : v)}
             >
-              <SelectTrigger id="f-comp">
+              <SelectTrigger id="f-erp-status">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="all">All Comparisons</SelectItem>
-                <SelectItem value="match">Match</SelectItem>
-                <SelectItem value="potential_discrepancy">Potential Discrepancy</SelectItem>
-                <SelectItem value="erp_not_entered">ERP Not Entered</SelectItem>
+                <SelectItem value="all">All ERP Statuses</SelectItem>
+                <SelectItem value="Present">ERP Present</SelectItem>
+                <SelectItem value="Absent">ERP Absent</SelectItem>
+                <SelectItem value="not_entered">ERP Not Entered</SelectItem>
               </SelectContent>
             </Select>
           </div>
