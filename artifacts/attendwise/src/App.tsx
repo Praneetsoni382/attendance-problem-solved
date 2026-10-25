@@ -18,11 +18,13 @@ import {
   Camera,
   Check,
   CheckCircle2,
+  ChevronLeft,
   ChevronRight,
   CircleAlert,
   Clock3,
   GraduationCap,
   KeyRound,
+  Layers,
   LayoutDashboard,
   LogOut,
   Mail,
@@ -116,6 +118,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@workspace/attendwise-design-system/components/ui/select";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@workspace/attendwise-design-system/components/ui/popover";
 import {
   Dialog,
   DialogContent,
@@ -2036,6 +2043,253 @@ function AttendanceCardDialog({
   );
 }
 
+const CALENDAR_MONTH_NAMES = [
+  "January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December"
+];
+
+const CALENDAR_YEAR_OPTIONS = Array.from({ length: 15 }, (_, i) => 2020 + i);
+
+// Dedicated interactive calendar picker popover with all 12 months and years selection
+function CalendarPickerPopover({
+  id,
+  value,
+  onChange,
+  className,
+}: {
+  id?: string;
+  value: string;
+  onChange: (val: string) => void;
+  className?: string;
+}) {
+  const [open, setOpen] = useState(false);
+
+  const parsed = useMemo(() => {
+    if (value && /^\d{4}-\d{2}-\d{2}$/.test(value)) {
+      const [y, m, d] = value.split("-").map(Number);
+      return { year: y, month: m - 1, day: d };
+    }
+    const today = new Date();
+    return { year: today.getFullYear(), month: today.getMonth(), day: today.getDate() };
+  }, [value]);
+
+  const [viewYear, setViewYear] = useState(parsed.year);
+  const [viewMonth, setViewMonth] = useState(parsed.month);
+
+  useEffect(() => {
+    if (open) {
+      setViewYear(parsed.year);
+      setViewMonth(parsed.month);
+    }
+  }, [open, parsed.year, parsed.month]);
+
+  const prevMonth = () => {
+    if (viewMonth === 0) {
+      setViewMonth(11);
+      setViewYear((y) => y - 1);
+    } else {
+      setViewMonth((m) => m - 1);
+    }
+  };
+
+  const nextMonth = () => {
+    if (viewMonth === 11) {
+      setViewMonth(0);
+      setViewYear((y) => y + 1);
+    } else {
+      setViewMonth((m) => m + 1);
+    }
+  };
+
+  const daysInMonth = useMemo(() => {
+    return new Date(viewYear, viewMonth + 1, 0).getDate();
+  }, [viewYear, viewMonth]);
+
+  const firstDayOfWeek = useMemo(() => {
+    return new Date(viewYear, viewMonth, 1).getDay();
+  }, [viewYear, viewMonth]);
+
+  const handleSelectDay = (day: number) => {
+    const mm = String(viewMonth + 1).padStart(2, "0");
+    const dd = String(day).padStart(2, "0");
+    onChange(`${viewYear}-${mm}-${dd}`);
+    setOpen(false);
+  };
+
+  const handleSetToday = () => {
+    const today = new Date();
+    const yyyy = today.getFullYear();
+    const mm = String(today.getMonth() + 1).padStart(2, "0");
+    const dd = String(today.getDate()).padStart(2, "0");
+    onChange(`${yyyy}-${mm}-${dd}`);
+    setOpen(false);
+  };
+
+  const handleClear = () => {
+    onChange("");
+    setOpen(false);
+  };
+
+  const todayStr = useMemo(() => {
+    const today = new Date();
+    return `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+  }, []);
+
+  return (
+    <div className={`flex items-center gap-1.5 ${className || ""}`}>
+      <Input
+        id={id}
+        type="date"
+        className="h-8 text-xs bg-background flex-1"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+      />
+      <Popover open={open} onOpenChange={setOpen}>
+        <PopoverTrigger asChild>
+          <Button
+            type="button"
+            variant="outline"
+            size="icon"
+            className="h-8 w-8 shrink-0 text-primary border-primary/20 hover:bg-primary/10 hover:text-primary transition-colors cursor-pointer"
+            title="Open Calendar (All 12 Months & Years)"
+            aria-label="Open Calendar"
+          >
+            <CalendarDays className="h-4 w-4" />
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent className="w-72 p-3 bg-popover text-popover-foreground border shadow-lg rounded-xl z-50" align="end">
+          {/* Header with 12 Months & Years selector */}
+          <div className="flex items-center justify-between gap-1 pb-2 border-b mb-2">
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7"
+              onClick={prevMonth}
+              title="Previous Month"
+            >
+              <ChevronLeft className="h-4 w-4" />
+            </Button>
+
+            <div className="flex items-center gap-1">
+              <select
+                aria-label="Select month"
+                value={viewMonth}
+                onChange={(e) => setViewMonth(Number(e.target.value))}
+                className="h-7 text-xs font-semibold bg-background border border-border rounded px-1.5 py-0.5 cursor-pointer text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+              >
+                {CALENDAR_MONTH_NAMES.map((name, idx) => (
+                  <option key={name} value={idx}>
+                    {name}
+                  </option>
+                ))}
+              </select>
+
+              <select
+                aria-label="Select year"
+                value={viewYear}
+                onChange={(e) => setViewYear(Number(e.target.value))}
+                className="h-7 text-xs font-semibold bg-background border border-border rounded px-1.5 py-0.5 cursor-pointer text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+              >
+                {CALENDAR_YEAR_OPTIONS.map((yr) => (
+                  <option key={yr} value={yr}>
+                    {yr}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7"
+              onClick={nextMonth}
+              title="Next Month"
+            >
+              <ChevronRight className="h-4 w-4" />
+            </Button>
+          </div>
+
+          {/* Weekday labels */}
+          <div className="grid grid-cols-7 gap-1 text-center text-[10px] font-bold text-muted-foreground mb-1">
+            <span>Su</span>
+            <span>Mo</span>
+            <span>Tu</span>
+            <span>We</span>
+            <span>Th</span>
+            <span>Fr</span>
+            <span>Sa</span>
+          </div>
+
+          {/* Days grid */}
+          <div className="grid grid-cols-7 gap-1 text-center">
+            {Array.from({ length: firstDayOfWeek }).map((_, i) => (
+              <div key={`empty-${i}`} className="h-7 w-7" />
+            ))}
+            {Array.from({ length: daysInMonth }).map((_, i) => {
+              const day = i + 1;
+              const dateStr = `${viewYear}-${String(viewMonth + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+              const isSelected = dateStr === value;
+              const isToday = dateStr === todayStr;
+
+              return (
+                <button
+                  key={day}
+                  type="button"
+                  onClick={() => handleSelectDay(day)}
+                  className={`h-7 w-7 text-xs rounded-md flex items-center justify-center font-medium transition-colors cursor-pointer ${
+                    isSelected
+                      ? "bg-primary text-primary-foreground font-bold shadow-xs"
+                      : isToday
+                      ? "border border-primary text-primary font-semibold hover:bg-primary/10"
+                      : "text-foreground hover:bg-muted"
+                  }`}
+                >
+                  {day}
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Bottom quick actions */}
+          <div className="flex items-center justify-between pt-2.5 mt-2.5 border-t text-xs">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-6 text-[11px] px-2 text-primary hover:text-primary cursor-pointer"
+              onClick={handleSetToday}
+            >
+              Today
+            </Button>
+            {value && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="h-6 text-[11px] px-2 text-destructive hover:text-destructive cursor-pointer"
+                onClick={handleClear}
+              >
+                Clear
+              </Button>
+            )}
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-6 text-[11px] px-2 text-muted-foreground cursor-pointer"
+              onClick={() => setOpen(false)}
+            >
+              Close
+            </Button>
+          </div>
+        </PopoverContent>
+      </Popover>
+    </div>
+  );
+}
+
 // Main Dashboard with Today's Schedule and embedded Attendance History Dashboard
 function Dashboard({
   user,
@@ -2176,6 +2430,42 @@ function Dashboard({
     setSelectedCardSession(session);
     setCardDialogOpen(true);
   };
+
+  const isAnyFilterActive = Boolean(
+    filters.subjectId ||
+    filters.category ||
+    filters.personalStatus ||
+    filters.comparisonStatus ||
+    filters.from ||
+    filters.to
+  );
+
+  const activeFilterSummary = useMemo(() => {
+    const parts: string[] = [];
+    if (filters.subjectId) {
+      const sub = subjects?.find((s) => s.id === filters.subjectId);
+      parts.push(sub ? sub.code : "Subject");
+    }
+    if (filters.category) parts.push(filters.category);
+    if (filters.personalStatus) {
+      if (filters.personalStatus === "in_run") parts.push("Active Window");
+      else if (filters.personalStatus === "frozen") parts.push("Frozen");
+      else parts.push(filters.personalStatus);
+    }
+    if (filters.comparisonStatus) {
+      if (filters.comparisonStatus === "match") parts.push("ERP Match");
+      else if (filters.comparisonStatus === "potential_discrepancy") parts.push("Discrepancy");
+      else if (filters.comparisonStatus === "erp_not_entered") parts.push("ERP Not Entered");
+    }
+    if (filters.from && filters.to) {
+      parts.push(`${formatDate(filters.from)} to ${formatDate(filters.to)}`);
+    } else if (filters.from) {
+      parts.push(`From ${formatDate(filters.from)}`);
+    } else if (filters.to) {
+      parts.push(`Until ${formatDate(filters.to)}`);
+    }
+    return parts.join(" · ");
+  }, [filters, subjects]);
 
   return (
     <>
@@ -2502,29 +2792,67 @@ function Dashboard({
 
             <div className="space-y-1">
               <Label htmlFor="dh-from" className="text-xs">From Date</Label>
-              <Input
+              <CalendarPickerPopover
                 id="dh-from"
-                type="date"
-                className="h-8 text-xs bg-background"
                 value={filters.from}
-                onChange={(e) => patchFilter("from", e.target.value)}
+                onChange={(v) => patchFilter("from", v)}
               />
             </div>
 
             <div className="space-y-1">
               <Label htmlFor="dh-to" className="text-xs">To Date</Label>
-              <div className="flex gap-1.5">
-                <Input
+              <div className="flex gap-1.5 items-center">
+                <CalendarPickerPopover
                   id="dh-to"
-                  type="date"
-                  className="h-8 text-xs bg-background"
+                  className="flex-1"
                   value={filters.to}
-                  onChange={(e) => patchFilter("to", e.target.value)}
+                  onChange={(v) => patchFilter("to", v)}
                 />
-                <Button variant="outline" size="icon" className="h-8 w-8 shrink-0" onClick={resetFilters} aria-label="Clear filters">
+                <Button variant="outline" size="icon" className="h-8 w-8 shrink-0 cursor-pointer" onClick={resetFilters} title="Clear filters" aria-label="Clear filters">
                   <X className="h-3.5 w-3.5" />
                 </Button>
               </div>
+            </div>
+          </div>
+
+          {/* Active Filter Criteria & Total Class Count Bar */}
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2.5 px-3.5 py-2.5 rounded-xl border bg-muted/30 shadow-2xs">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-xs font-semibold text-foreground flex items-center gap-1.5">
+                <Layers className="h-4 w-4 text-primary" />
+                Total Classes:
+              </span>
+              <Badge variant="secondary" className="font-mono text-xs font-bold px-2.5 py-0.5 bg-primary/10 text-primary border-primary/20">
+                {filteredSessions.length} {filteredSessions.length === 1 ? "Class" : "Classes"}
+              </Badge>
+              {isAnyFilterActive ? (
+                <span className="text-[11px] text-muted-foreground flex items-center gap-1">
+                  (Filtered by: <strong className="text-foreground font-medium">{activeFilterSummary}</strong>)
+                </span>
+              ) : (
+                <span className="text-[11px] text-muted-foreground">
+                  (All scheduled classes)
+                </span>
+              )}
+            </div>
+            <div className="flex items-center gap-1.5 text-[11px] flex-wrap">
+              <span className="text-muted-foreground text-[10px]">Breakdown:</span>
+              <Badge variant="outline" className="text-[10px] bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-300">
+                {filteredSessions.filter((s) => s.personalStatus === "present").length} Present
+              </Badge>
+              <Badge variant="outline" className="text-[10px] bg-rose-50 text-rose-700 border-rose-200 dark:bg-rose-950/40 dark:text-rose-300">
+                {filteredSessions.filter((s) => s.personalStatus === "absent").length} Absent
+              </Badge>
+              {filteredSessions.filter((s) => s.personalStatus === "frozen").length > 0 && (
+                <Badge variant="outline" className="text-[10px] bg-sky-50 text-sky-700 border-sky-200 dark:bg-sky-950/40 dark:text-sky-300">
+                  {filteredSessions.filter((s) => s.personalStatus === "frozen").length} Frozen
+                </Badge>
+              )}
+              {filteredSessions.filter((s) => s.personalStatus === "upcoming").length > 0 && (
+                <Badge variant="outline" className="text-[10px] text-muted-foreground">
+                  {filteredSessions.filter((s) => s.personalStatus === "upcoming").length} Upcoming
+                </Badge>
+              )}
             </div>
           </div>
 
@@ -3161,6 +3489,42 @@ function AttendanceHistory({
     }).sort((a, b) => new Date(b.scheduledStartAt).getTime() - new Date(a.scheduledStartAt).getTime());
   }, [sessions, filters, nowMs]);
 
+  const isAnyFilterActive = Boolean(
+    filters.subjectId ||
+    filters.category ||
+    filters.personalStatus ||
+    filters.comparisonStatus ||
+    filters.from ||
+    filters.to
+  );
+
+  const activeFilterSummary = useMemo(() => {
+    const parts: string[] = [];
+    if (filters.subjectId) {
+      const sub = subjects?.find((s) => s.id === filters.subjectId);
+      parts.push(sub ? sub.code : "Subject");
+    }
+    if (filters.category) parts.push(filters.category);
+    if (filters.personalStatus) {
+      if (filters.personalStatus === "in_run") parts.push("Active Window");
+      else if (filters.personalStatus === "frozen") parts.push("Frozen");
+      else parts.push(filters.personalStatus);
+    }
+    if (filters.comparisonStatus) {
+      if (filters.comparisonStatus === "match") parts.push("ERP Match");
+      else if (filters.comparisonStatus === "potential_discrepancy") parts.push("Discrepancy");
+      else if (filters.comparisonStatus === "erp_not_entered") parts.push("ERP Not Entered");
+    }
+    if (filters.from && filters.to) {
+      parts.push(`${formatDate(filters.from)} to ${formatDate(filters.to)}`);
+    } else if (filters.from) {
+      parts.push(`From ${formatDate(filters.from)}`);
+    } else if (filters.to) {
+      parts.push(`Until ${formatDate(filters.to)}`);
+    }
+    return parts.join(" · ");
+  }, [filters, subjects]);
+
   return (
     <>
       <div className="mb-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
@@ -3249,14 +3613,23 @@ function AttendanceHistory({
 
           <div className="space-y-1">
             <Label htmlFor="f-from" className="text-xs">From Date</Label>
-            <Input id="f-from" type="date" value={filters.from} onChange={(e) => patch("from", e.target.value)} />
+            <CalendarPickerPopover
+              id="f-from"
+              value={filters.from}
+              onChange={(v) => patch("from", v)}
+            />
           </div>
 
           <div className="space-y-1">
             <Label htmlFor="f-to" className="text-xs">To Date</Label>
-            <div className="flex gap-2">
-              <Input id="f-to" type="date" value={filters.to} onChange={(e) => patch("to", e.target.value)} />
-              <Button variant="outline" size="icon" onClick={reset} aria-label="Clear filters">
+            <div className="flex gap-2 items-center">
+              <CalendarPickerPopover
+                id="f-to"
+                className="flex-1"
+                value={filters.to}
+                onChange={(v) => patch("to", v)}
+              />
+              <Button variant="outline" size="icon" className="h-8 w-8 shrink-0 cursor-pointer" onClick={reset} title="Clear filters" aria-label="Clear filters">
                 <X className="h-4 w-4" />
               </Button>
             </div>
@@ -3266,10 +3639,43 @@ function AttendanceHistory({
 
       {filteredSessions.length ? (
         <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-semibold">
-              {filteredSessions.length} Class Session{filteredSessions.length === 1 ? "" : "s"}
-            </CardTitle>
+          <CardHeader className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2.5 pb-3">
+            <div className="flex items-center gap-2 flex-wrap">
+              <CardTitle className="text-sm font-semibold flex items-center gap-1.5">
+                <Layers className="h-4 w-4 text-primary" /> Total Classes:
+              </CardTitle>
+              <Badge variant="secondary" className="font-mono text-xs font-bold px-2.5 py-0.5 bg-primary/10 text-primary border-primary/20">
+                {filteredSessions.length} {filteredSessions.length === 1 ? "Class" : "Classes"}
+              </Badge>
+              {isAnyFilterActive ? (
+                <span className="text-[11px] text-muted-foreground font-medium">
+                  (Filtered by: <strong className="text-foreground font-medium">{activeFilterSummary}</strong>)
+                </span>
+              ) : (
+                <span className="text-[11px] text-muted-foreground">
+                  (All scheduled classes)
+                </span>
+              )}
+            </div>
+            <div className="flex items-center gap-1.5 text-[11px] flex-wrap">
+              <span className="text-muted-foreground text-[10px]">Breakdown:</span>
+              <Badge variant="outline" className="text-[10px] bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-300">
+                {filteredSessions.filter((s) => s.personalStatus === "present").length} Present
+              </Badge>
+              <Badge variant="outline" className="text-[10px] bg-rose-50 text-rose-700 border-rose-200 dark:bg-rose-950/40 dark:text-rose-300">
+                {filteredSessions.filter((s) => s.personalStatus === "absent").length} Absent
+              </Badge>
+              {filteredSessions.filter((s) => s.personalStatus === "frozen").length > 0 && (
+                <Badge variant="outline" className="text-[10px] bg-sky-50 text-sky-700 border-sky-200 dark:bg-sky-950/40 dark:text-sky-300">
+                  {filteredSessions.filter((s) => s.personalStatus === "frozen").length} Frozen
+                </Badge>
+              )}
+              {filteredSessions.filter((s) => s.personalStatus === "upcoming").length > 0 && (
+                <Badge variant="outline" className="text-[10px] text-muted-foreground">
+                  {filteredSessions.filter((s) => s.personalStatus === "upcoming").length} Upcoming
+                </Badge>
+              )}
+            </div>
           </CardHeader>
           <CardContent className="p-0">
             <div className="divide-y">

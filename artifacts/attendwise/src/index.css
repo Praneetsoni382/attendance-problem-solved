@@ -22,3 +22,15 @@ body {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* Ensure calendar picker indicators on date inputs are always visible, prominent, and clickable */
+input[type="date"]::-webkit-calendar-picker-indicator {
+  cursor: pointer;
+  opacity: 0.85;
+  padding: 0.125rem;
+}
+
+input[type="date"]::-webkit-calendar-picker-indicator:hover {
+  opacity: 1;
+}
+
