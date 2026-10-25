@@ -2066,18 +2066,35 @@ function Dashboard({
   const [actionError, setActionError] = useState<string | null>(null);
   const [photoModalInfo, setPhotoModalInfo] = useState<{ url: string; captureTime?: string | null; session?: ClassSessionItem } | null>(null);
 
-  // Filters for the Attendance History dashboard embedded on the page
-  const [filters, setFilters] = useState({
-    subjectId: "",
-    category: "",
-    personalStatus: "",
-    comparisonStatus: "",
-    from: "",
-    to: "",
+  // Filters for the Attendance History dashboard embedded on the page (persisted so entering cards does not clear filters)
+  const [filters, setFilters] = useState(() => {
+    try {
+      const saved = sessionStorage.getItem("attendwise_dashboard_history_filters");
+      if (saved) return JSON.parse(saved);
+    } catch {}
+    return {
+      subjectId: "",
+      category: "",
+      personalStatus: "",
+      comparisonStatus: "",
+      from: "",
+      to: "",
+    };
   });
 
-  const patchFilter = (k: string, v: string) => setFilters((prev) => ({ ...prev, [k]: v }));
-  const resetFilters = () =>
+  const patchFilter = (k: string, v: string) =>
+    setFilters((prev) => {
+      const updated = { ...prev, [k]: v };
+      try {
+        sessionStorage.setItem("attendwise_dashboard_history_filters", JSON.stringify(updated));
+      } catch {}
+      return updated;
+    });
+
+  const resetFilters = () => {
+    try {
+      sessionStorage.removeItem("attendwise_dashboard_history_filters");
+    } catch {}
     setFilters({
       subjectId: "",
       category: "",
@@ -2086,6 +2103,7 @@ function Dashboard({
       from: "",
       to: "",
     });
+  };
 
   const stats = useMemo(() => computeAttendanceStats(sessions), [sessions]);
 
@@ -3062,17 +3080,35 @@ function AttendanceHistory({
   const [dialogOpen, setDialogOpen] = useState(false);
   const [photoModalInfo, setPhotoModalInfo] = useState<{ url: string; captureTime?: string | null; session?: ClassSessionItem } | null>(null);
 
-  const [filters, setFilters] = useState({
-    subjectId: "",
-    category: "",
-    personalStatus: "",
-    comparisonStatus: "",
-    from: "",
-    to: "",
+  // Filters for Attendance History view (persisted so entering cards and saving status preserves user filters)
+  const [filters, setFilters] = useState(() => {
+    try {
+      const saved = sessionStorage.getItem("attendwise_history_filters");
+      if (saved) return JSON.parse(saved);
+    } catch {}
+    return {
+      subjectId: "",
+      category: "",
+      personalStatus: "",
+      comparisonStatus: "",
+      from: "",
+      to: "",
+    };
   });
 
-  const patch = (k: string, v: string) => setFilters((prev) => ({ ...prev, [k]: v }));
-  const reset = () =>
+  const patch = (k: string, v: string) =>
+    setFilters((prev) => {
+      const updated = { ...prev, [k]: v };
+      try {
+        sessionStorage.setItem("attendwise_history_filters", JSON.stringify(updated));
+      } catch {}
+      return updated;
+    });
+
+  const reset = () => {
+    try {
+      sessionStorage.removeItem("attendwise_history_filters");
+    } catch {}
     setFilters({
       subjectId: "",
       category: "",
@@ -3081,6 +3117,7 @@ function AttendanceHistory({
       from: "",
       to: "",
     });
+  };
 
   const [currentTick, setCurrentTick] = useState(() => Date.now());
 
@@ -5421,89 +5458,71 @@ export default function App() {
         <Shell profile={profile} onLogout={handleLogout}>
           <ErrorBoundary>
             <Switch>
-              <Route
-                path="/"
-                component={() => (
-                  <Dashboard
-                    user={user}
-                    profile={profile}
-                    sessions={sessions}
-                    subjects={subjects}
-                    sessionsInitialLoading={sessionsInitialLoading}
-                    onRecordErp={handleRecordErp}
-                    onMarkPresent={handleMarkPresentQuick}
-                    onMarkAbsent={handleMarkAbsentQuick}
-                    onFreezeClass={handleFreezeClassQuick}
-                    onSaveCompleteAttendance={handleSaveCompleteAttendance}
-                  />
-                )}
-              />
-              <Route
-                path="/dashboard"
-                component={() => (
-                  <Dashboard
-                    user={user}
-                    profile={profile}
-                    sessions={sessions}
-                    subjects={subjects}
-                    sessionsInitialLoading={sessionsInitialLoading}
-                    onRecordErp={handleRecordErp}
-                    onMarkPresent={handleMarkPresentQuick}
-                    onMarkAbsent={handleMarkAbsentQuick}
-                    onFreezeClass={handleFreezeClassQuick}
-                    onSaveCompleteAttendance={handleSaveCompleteAttendance}
-                  />
-                )}
-              />
-              <Route
-                path="/analytics"
-                component={() => (
-                  <AnalyticsPage
-                    user={user}
-                    profile={profile}
-                    sessions={sessions}
-                    subjects={subjects}
-                    onRecordErp={handleRecordErp}
-                    onFreezeClass={handleFreezeClassQuick}
-                    onUnfreezeClass={handleUnfreezeClassQuick}
-                  />
-                )}
-              />
-              <Route
-                path="/timetable"
-                component={() => <Timetable user={user} timetable={timetable} subjects={subjects} />}
-              />
+              <Route path="/">
+                <Dashboard
+                  user={user}
+                  profile={profile}
+                  sessions={sessions}
+                  subjects={subjects}
+                  sessionsInitialLoading={sessionsInitialLoading}
+                  onRecordErp={handleRecordErp}
+                  onMarkPresent={handleMarkPresentQuick}
+                  onMarkAbsent={handleMarkAbsentQuick}
+                  onFreezeClass={handleFreezeClassQuick}
+                  onSaveCompleteAttendance={handleSaveCompleteAttendance}
+                />
+              </Route>
+              <Route path="/dashboard">
+                <Dashboard
+                  user={user}
+                  profile={profile}
+                  sessions={sessions}
+                  subjects={subjects}
+                  sessionsInitialLoading={sessionsInitialLoading}
+                  onRecordErp={handleRecordErp}
+                  onMarkPresent={handleMarkPresentQuick}
+                  onMarkAbsent={handleMarkAbsentQuick}
+                  onFreezeClass={handleFreezeClassQuick}
+                  onSaveCompleteAttendance={handleSaveCompleteAttendance}
+                />
+              </Route>
+              <Route path="/analytics">
+                <AnalyticsPage
+                  user={user}
+                  profile={profile}
+                  sessions={sessions}
+                  subjects={subjects}
+                  onRecordErp={handleRecordErp}
+                  onFreezeClass={handleFreezeClassQuick}
+                  onUnfreezeClass={handleUnfreezeClassQuick}
+                />
+              </Route>
+              <Route path="/timetable">
+                <Timetable user={user} timetable={timetable} subjects={subjects} />
+              </Route>
               <Route path="/calendar" component={AcademicCalendarView} />
-              <Route
-                path="/history"
-                component={() => (
-                  <AttendanceHistory
-                    user={user}
-                    sessions={sessions}
-                    subjects={subjects}
-                    sessionsInitialLoading={sessionsInitialLoading}
-                    onRecordErp={handleRecordErp}
-                    onMarkPresent={handleMarkPresentQuick}
-                    onMarkAbsent={handleMarkAbsentQuick}
-                    onFreezeClass={handleFreezeClassQuick}
-                    onSaveCompleteAttendance={handleSaveCompleteAttendance}
-                  />
-                )}
-              />
-              <Route
-                path="/subjects"
-                component={() => <Subjects user={user} subjects={subjects} sessions={sessions} />}
-              />
-              <Route
-                path="/comparison"
-                component={() => (
-                  <Comparison user={user} sessions={sessions} onRecordErp={handleRecordErp} onFreezeClass={handleFreezeClassQuick} />
-                )}
-              />
-              <Route
-                path="/profile"
-                component={() => <ProfileView user={user} profile={profile} onLogout={handleLogout} />}
-              />
+              <Route path="/history">
+                <AttendanceHistory
+                  user={user}
+                  sessions={sessions}
+                  subjects={subjects}
+                  sessionsInitialLoading={sessionsInitialLoading}
+                  onRecordErp={handleRecordErp}
+                  onMarkPresent={handleMarkPresentQuick}
+                  onMarkAbsent={handleMarkAbsentQuick}
+                  onFreezeClass={handleFreezeClassQuick}
+                  onSaveCompleteAttendance={handleSaveCompleteAttendance}
+                />
+              </Route>
+              <Route path="/subjects">
+                <Subjects user={user} subjects={subjects} sessions={sessions} />
+              </Route>
+              <Route path="/comparison">
+                <Comparison user={user} sessions={sessions} onRecordErp={handleRecordErp} onFreezeClass={handleFreezeClassQuick} />
+              </Route>
+              <Route path="/profile">
+                <ProfileView user={user} profile={profile} onLogout={handleLogout} />
+              </Route>
               <Route path="/session/:sessionId">
                 {(params) => (
                   <SessionDetail
