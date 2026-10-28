@@ -32,8 +32,8 @@ service cloud.firestore {
         allow update: if request.auth != null && request.auth.uid == uid
           // Present is strictly immutable: once marked Present, it can never be changed to Absent or Upcoming
           && (!('personalStatus' in resource.data) || resource.data.personalStatus != 'present' || request.resource.data.personalStatus in ['present', 'frozen'])
-          // Once ERP status is recorded, it is locked and cannot be changed or overwritten
-          && (!('erpStatus' in resource.data) || resource.data.erpStatus == null || request.resource.data.erpStatus == resource.data.erpStatus);
+          // Once ERP status is recorded, it is locked and cannot be changed or overwritten, unless reset/purged to null
+          && (!('erpStatus' in resource.data) || resource.data.erpStatus == null || request.resource.data.erpStatus == resource.data.erpStatus || request.resource.data.erpStatus == null);
         allow delete: if request.auth != null && request.auth.uid == uid;
       }
 

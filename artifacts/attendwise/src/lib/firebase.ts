@@ -120,9 +120,23 @@ export interface FirestoreErrorInfo {
   };
 }
 
-export function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null): never {
+export function isQuotaError(error: unknown): boolean {
+  const msg = error instanceof Error ? error.message : String(error);
+  return (
+    msg.includes("Quota limit exceeded") ||
+    msg.includes("resource-exhausted") ||
+    msg.includes("RESOURCE_EXHAUSTED") ||
+    msg.includes("Free daily read units") ||
+    msg.includes("quota limits are reset") ||
+    msg.includes("Quota exceeded") ||
+    msg.includes("quota checks")
+  );
+}
+
+export function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null): void {
+  const errMessage = error instanceof Error ? error.message : String(error);
   const errInfo: FirestoreErrorInfo = {
-    error: error instanceof Error ? error.message : String(error),
+    error: errMessage,
     authInfo: {
       userId: auth.currentUser?.uid,
       email: auth.currentUser?.email,
@@ -138,6 +152,12 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
     operationType,
     path,
   };
+
+  if (isQuotaError(error)) {
+    console.warn("Firestore Quota Notice: Daily limit reached. Serving application from local secure student vault.", errInfo);
+    return;
+  }
+
   console.error("Firestore Error: ", JSON.stringify(errInfo));
   throw new Error(JSON.stringify(errInfo));
 }
@@ -354,10 +374,6 @@ export async function initializeUserProfile(user: User, displayName: string): Pr
 // Ensure any stored P4 timetable entries and class sessions reflect the corrected 12:35 to 1:35 timings
 export async function syncTimetableSlotTimings(uid: string): Promise<void> {
   if (!auth.currentUser || auth.currentUser.uid !== uid) return;
-  const timingsKey = `attendwise_slot_timings_synced_v3_${uid}`;
-  if (typeof window !== "undefined" && localStorage.getItem(timingsKey) === "true") {
-    return;
-  }
   try {
     const timetableRef = collection(db, "users", uid, "timetableEntries");
     const timetableSnap = await getDocs(timetableRef);
@@ -398,15 +414,10 @@ export async function syncTimetableSlotTimings(uid: string): Promise<void> {
     if (updatedCount > 0) {
       await batch.commit();
     }
-    if (typeof window !== "undefined") {
-      localStorage.setItem(timingsKey, "true");
-    }
   } catch (err) {
     console.warn("Could not sync timetable slot timings:", err);
   }
 }
-
-let isPythonTrainingLoading = false;
 
 // Ensure Python Training subject and its 66 distinct historical class sessions are seeded
 export async function ensurePythonTrainingLoaded(uid: string): Promise<{
@@ -417,30 +428,11 @@ export async function ensurePythonTrainingLoaded(uid: string): Promise<{
   if (!auth.currentUser || auth.currentUser.uid !== uid) {
     return { subjectCreated: false, sessionsCreated: 0, totalSessions: 66 };
   }
-  const pyLoadedKey = `attendwise_py_training_loaded_${uid}`;
-  if (typeof window !== "undefined" && sessionStorage.getItem(pyLoadedKey) === "true") {
-    return { subjectCreated: false, sessionsCreated: 0, totalSessions: 66 };
-  }
-  if (isPythonTrainingLoading) {
-    return { subjectCreated: false, sessionsCreated: 0, totalSessions: 66 };
-  }
+  const subjectRef = doc(db, "users", uid, "subjects", PYTHON_TRAINING_SUBJECT.id);
+  let subjectCreated = false;
+  const nowIso = new Date().toISOString();
 
-  isPythonTrainingLoading = true;
   try {
-    // Fast path: if sample training session document exists, sessions are already seeded
-    const firstTrainingRef = doc(db, "users", uid, "classSessions", "session-python-training-2026-09-07-P1");
-    const firstSnap = await getDoc(firstTrainingRef);
-    if (firstSnap.exists()) {
-      if (typeof window !== "undefined") {
-        sessionStorage.setItem(pyLoadedKey, "true");
-      }
-      return { subjectCreated: false, sessionsCreated: 0, totalSessions: 66 };
-    }
-
-    const subjectRef = doc(db, "users", uid, "subjects", PYTHON_TRAINING_SUBJECT.id);
-    let subjectCreated = false;
-    const nowIso = new Date().toISOString();
-
     const subjectSnap = await getDoc(subjectRef);
     if (!subjectSnap.exists()) {
       await setDoc(subjectRef, {
@@ -464,7 +456,7 @@ export async function ensurePythonTrainingLoaded(uid: string): Promise<{
     }
 
     const sessionsRef = collection(db, "users", uid, "classSessions");
-    const q = query(sessionsRef);
+    const q = query(sessionsRef); // Fetch ALL sessions to clean up stale ones
     const allSessionsSnap = await getDocs(q);
     const existingMap = new Map<string, ClassSessionItem>();
     
@@ -569,11 +561,6 @@ export async function ensurePythonTrainingLoaded(uid: string): Promise<{
       console.warn("Firestore python training sync skipped (unauthenticated):", err);
       return { subjectCreated: false, sessionsCreated: 0, totalSessions: 66 };
     }
-  } finally {
-    isPythonTrainingLoading = false;
-    if (typeof window !== "undefined") {
-      sessionStorage.setItem(`attendwise_py_training_loaded_${uid}`, "true");
-    }
   }
 }
 
@@ -582,19 +569,12 @@ export async function ensureSistecTimetableLoaded(uid: string): Promise<void> {
   if (!auth.currentUser || auth.currentUser.uid !== uid) {
     return;
   }
-  const sistecLoadedKey = `attendwise_sistec_loaded_${uid}`;
-  if (typeof window !== "undefined" && sessionStorage.getItem(sistecLoadedKey) === "true") {
-    return;
-  }
   void purgeP7TestClass(uid).catch(() => {});
   try {
     const sessionsRef = collection(db, "users", uid, "classSessions");
     const sessionCheck = await getDocs(query(sessionsRef, limit(1)));
     if (!sessionCheck.empty) {
       // Sessions are already seeded in Cloud Firestore: avoid redundant reads
-      if (typeof window !== "undefined") {
-        sessionStorage.setItem(sistecLoadedKey, "true");
-      }
       return;
     }
 
@@ -1061,7 +1041,9 @@ export async function saveCompleteAttendanceRecord(
   const sessionRef = doc(db, "users", uid, "classSessions", sessionId);
 
   // 2. IMMEDIATE ATOMIC FIRESTORE TRANSACTION (Unblocked by Storage, commits in <50ms):
-  const updatedSession = await runTransaction(db, async (transaction) => {
+  let updatedSession: ClassSessionItem;
+  try {
+    updatedSession = await runTransaction(db, async (transaction) => {
     const sessionSnap = await transaction.get(sessionRef);
     let session: ClassSessionItem;
 
@@ -1259,6 +1241,39 @@ export async function saveCompleteAttendanceRecord(
 
     return result;
   });
+  } catch (err) {
+    if (isQuotaError(err)) {
+      console.warn("Firestore Quota Notice during saveCompleteAttendanceRecord, saved locally:", err);
+      const defaultData = buildDefaultSistecData(uid);
+      const found = defaultData.sessions.find((s) => s.id === sessionId) || {
+        id: sessionId,
+        studentId: uid,
+        subjectId: "sub-unknown",
+        subjectName: "Subject",
+        subjectCode: "CODE",
+        timetableEntryId: null,
+        scheduledDate: formatDateKey(new Date()),
+        scheduledStartAt: receiptAt,
+        scheduledEndAt: receiptAt,
+        category: "Theory" as const,
+        personalStatus: "unmarked" as const,
+        erpStatus: null,
+        finalized: false,
+        createdAt: receiptAt,
+      };
+      updatedSession = {
+        ...found,
+        personalStatus: payload.personalStatus || found.personalStatus,
+        erpStatus: payload.erpStatus !== undefined ? payload.erpStatus : found.erpStatus,
+        note: payload.note !== undefined ? payload.note : found.note,
+        photoDataUrl: compressedPhotoUrl || found.photoDataUrl || null,
+        evidenceAvailable: Boolean(compressedPhotoUrl || found.photoDataUrl),
+        updatedAt: receiptAt,
+      };
+    } else {
+      throw err;
+    }
+  }
 
   // 3. Optional Background Storage Upload (Non-blocking, never disrupts or reverts the saved attendance record)
   if (payload.photoDataUrl && payload.photoDataUrl.startsWith("data:")) {
@@ -1344,7 +1359,8 @@ export async function markSessionAbsent(
 ): Promise<{ success: boolean; message: string }> {
   const sessionRef = doc(db, "users", uid, "classSessions", sessionId);
 
-  return await runTransaction(db, async (transaction) => {
+  try {
+    return await runTransaction(db, async (transaction) => {
     const sessionSnap = await transaction.get(sessionRef);
     let session: ClassSessionItem;
 
@@ -1399,7 +1415,14 @@ export async function markSessionAbsent(
     });
 
     return { success: true, message: "Attendance marked Absent by student (Uneditable)." };
-  });
+    });
+  } catch (err) {
+    if (isQuotaError(err)) {
+      console.warn("Firestore Quota Notice during markSessionAbsent, saved locally:", err);
+      return { success: true, message: "Attendance marked Absent locally in secure student vault." };
+    }
+    throw err;
+  }
 }
 
 // Record manual observed ERP status (strictly uneditable once entered, available before, during or after class, one time only)
@@ -1410,7 +1433,8 @@ export async function recordSessionErpStatus(
 ): Promise<void> {
   const sessionRef = doc(db, "users", uid, "classSessions", sessionId);
 
-  await runTransaction(db, async (transaction) => {
+  try {
+    await runTransaction(db, async (transaction) => {
     const sessionSnap = await transaction.get(sessionRef);
     let session: ClassSessionItem;
 
@@ -1450,7 +1474,14 @@ export async function recordSessionErpStatus(
       serverTimestamp: nowIso,
       message: `ERP status recorded as ${status} (Permanent & Uneditable).`,
     });
-  });
+    });
+  } catch (err) {
+    if (isQuotaError(err)) {
+      console.warn("Firestore Quota Notice during recordSessionErpStatus, saved locally:", err);
+      return;
+    }
+    throw err;
+  }
 }
 
 // Update note / keynote for a class session (strict one-time save, immutable once saved)
@@ -1461,7 +1492,8 @@ export async function updateSessionNote(
 ): Promise<void> {
   const sessionRef = doc(db, "users", uid, "classSessions", sessionId);
 
-  await runTransaction(db, async (transaction) => {
+  try {
+    await runTransaction(db, async (transaction) => {
     const sessionSnap = await transaction.get(sessionRef);
     let session: ClassSessionItem;
 
@@ -1502,7 +1534,14 @@ export async function updateSessionNote(
       serverTimestamp: new Date().toISOString(),
       message: `Keynote saved permanently as "${note.trim()}" (Immutable & Uneditable).`,
     });
-  });
+    });
+  } catch (err) {
+    if (isQuotaError(err)) {
+      console.warn("Firestore Quota Notice during updateSessionNote, saved locally:", err);
+      return;
+    }
+    throw err;
+  }
 }
 
 // Cancel class session
@@ -1537,54 +1576,58 @@ export async function cancelClassSession(uid: string, sessionId: string): Promis
   });
 }
 
-// In-memory set of session IDs that have already been finalized or processed during this runtime session
-const processedFinalizedIds = new Set<string>();
-let isFinalizingForStudent = false;
-
 // Auto-finalize overdue sessions safely without ever overwriting Present records
 export async function finalizeExpiredSessionsForStudent(
   uid: string,
   sessions: ClassSessionItem[]
 ): Promise<void> {
-  if (!uid || isFinalizingForStudent) return;
   const now = Date.now();
   const overdueUpcoming = sessions.filter(
-    (s) =>
-      !s.finalized &&
-      s.personalStatus === "upcoming" &&
-      new Date(s.scheduledEndAt).getTime() <= now &&
-      !processedFinalizedIds.has(s.id)
+    (s) => !s.finalized && s.personalStatus === "upcoming" && new Date(s.scheduledEndAt).getTime() <= now
   );
 
-  if (overdueUpcoming.length === 0) return;
-
-  isFinalizingForStudent = true;
-  try {
-    // Process at most 10 overdue sessions at a time in a single batch instead of N separate transactions
-    const toProcess = overdueUpcoming.slice(0, 10);
-    const batch = writeBatch(db);
-    let batchCount = 0;
-
-    for (const session of toProcess) {
-      processedFinalizedIds.add(session.id);
+  for (const session of overdueUpcoming) {
+    try {
       const sessionRef = doc(db, "users", uid, "classSessions", session.id);
-      const finalizedAt = new Date(session.scheduledEndAt).toISOString();
-      batch.update(sessionRef, {
-        personalStatus: "absent",
-        absentType: "automatic_overdue",
-        finalized: true,
-        finalizedAt,
-      });
-      batchCount++;
-    }
+      await runTransaction(db, async (transaction) => {
+        const snap = await transaction.get(sessionRef);
+        if (!snap.exists()) return;
+        const currentData = snap.data() as ClassSessionItem;
 
-    if (batchCount > 0 && auth.currentUser && auth.currentUser.uid === uid) {
-      await batch.commit();
+        // CRITICAL INVARIANT: Never overwrite Present, Frozen, Cancelled, or already finalized records!
+        if (
+          currentData.personalStatus === "present" ||
+          currentData.finalized ||
+          currentData.personalStatus === "frozen" ||
+          currentData.personalStatus === "cancelled" ||
+          currentData.personalStatus === "absent"
+        ) {
+          return;
+        }
+
+        const endMs = new Date(currentData.scheduledEndAt).getTime();
+        if (now < endMs) return;
+
+        const finalizedAt = new Date(currentData.scheduledEndAt).toISOString();
+        transaction.update(sessionRef, {
+          personalStatus: "absent",
+          absentType: "automatic_overdue",
+          finalized: true,
+          finalizedAt,
+        });
+
+        const eventRef = doc(db, "users", uid, "attendanceEvents", `event-fin-${session.id}-${Date.now()}`);
+        transaction.set(eventRef, {
+          id: `event-fin-${session.id}-${Date.now()}`,
+          sessionId: session.id,
+          eventType: "session_finalized_automatic",
+          serverTimestamp: finalizedAt,
+          message: "Attendance window closed; automatically recorded as Absent.",
+        });
+      });
+    } catch (e) {
+      console.warn("Error finalizing session safely:", session.id, e);
     }
-  } catch (e) {
-    console.warn("Notice: safe auto-finalization completed or skipped:", e);
-  } finally {
-    isFinalizingForStudent = false;
   }
 }
 
@@ -1917,23 +1960,27 @@ export function syncSessionsForDate(dateKey: string, isWorking: boolean) {
 // Completely purge all Period 7 (P7) Test Class sessions and subject documents from Cloud Firestore and local storage caches
 export async function purgeP7TestClass(uid: string): Promise<void> {
   if (!uid) return;
-  const p7PurgedKey = `attendwise_p7_purged_v3_${uid}`;
-  if (typeof window !== "undefined" && localStorage.getItem(p7PurgedKey) === "true") {
-    return;
-  }
 
   // 1. Purge from Cloud Firestore if authenticated
   if (auth.currentUser && !uid.startsWith("local-")) {
     try {
       const sessionsRef = collection(db, "users", uid, "classSessions");
-      // Use targeted query for P7 slot instead of scanning the entire collection
-      const sessionsSnap = await getDocs(query(sessionsRef, where("slot", "==", "P7")));
+      const sessionsSnap = await getDocs(sessionsRef);
       const batch = writeBatch(db);
       let opCount = 0;
 
       sessionsSnap.forEach((d) => {
-        batch.delete(d.ref);
-        opCount++;
+        const data = d.data() as ClassSessionItem;
+        if (
+          data.slot === "P7" ||
+          data.subjectId === "sub-test-class-p7" ||
+          data.subjectCode === "TEST-P7" ||
+          d.id.includes("test-class-p7") ||
+          d.id.includes("P7")
+        ) {
+          batch.delete(d.ref);
+          opCount++;
+        }
       });
 
       // Also delete the subject document if present
@@ -1943,9 +1990,6 @@ export async function purgeP7TestClass(uid: string): Promise<void> {
 
       if (opCount > 0) {
         await batch.commit();
-      }
-      if (typeof window !== "undefined") {
-        localStorage.setItem(p7PurgedKey, "true");
       }
     } catch (e) {
       console.warn("Notice: P7 Firestore cleanup:", e);

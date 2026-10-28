@@ -31,17 +31,8 @@ export const dataManager = {
     return null;
   },
 
-  async fetchAndCacheFreshData(uid: string, force = false): Promise<DashboardData> {
+  async fetchAndCacheFreshData(uid: string): Promise<DashboardData> {
     try {
-      // 5-minute quota-protection throttle: avoid repeated mass fetches within TTL
-      if (!force) {
-        const cached = await this.getCachedDashboardData(uid);
-        const lastSyncTime = Number(sessionStorage.getItem(`attendwise_last_sync_${uid}`) || "0");
-        if (cached && (Date.now() - lastSyncTime < 5 * 60 * 1000)) {
-          return cached;
-        }
-      }
-
       // Efficiently batched query using indexed collections
       const sessionsRef = collection(db, "users", uid, "classSessions");
       const subjectsRef = collection(db, "users", uid, "subjects");
@@ -62,8 +53,6 @@ export const dataManager = {
         setCachedStore("sessions", sessions),
         setCachedStore("subjects", subjects),
       ]);
-
-      sessionStorage.setItem(`attendwise_last_sync_${uid}`, String(Date.now()));
 
       return {
         sessions,
