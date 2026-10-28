@@ -5478,12 +5478,8 @@ export default function App() {
 
           setSessions(cleanMergedList);
           setSessionsInitialLoading(false);
-
-          if (missingTrainingCount > 0) {
-            ensurePythonTrainingLoaded(user.uid).catch(console.warn);
-          }
-
-          void finalizeExpiredSessionsForStudent(user.uid, mergedList);
+          // Zero-write snapshot policy: do NOT trigger cloud writes inside onSnapshot
+          // to prevent recursive cascade loops and quota exhaustion.
         },
         (error) => {
           handleFirestoreError(error, OperationType.GET, `users/${user.uid}/classSessions`);
