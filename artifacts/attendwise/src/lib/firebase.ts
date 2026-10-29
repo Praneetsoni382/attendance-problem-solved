@@ -10,7 +10,7 @@ import {
   updateProfile,
   onAuthStateChanged,
   setPersistence,
-  browserLocalPersistence,
+  browserSessionPersistence,
   type User,
 } from "firebase/auth";
 import {
@@ -77,8 +77,8 @@ if (typeof window !== "undefined") {
 // Initialize Firebase with IndexedDB persistent local cache to prevent quota exhaustion
 const app = getApps().length > 0 ? getApps()[0]! : initializeApp(firebaseConfig);
 export const auth = getAuth(app);
-setPersistence(auth, browserLocalPersistence).catch((err) => {
-  console.warn("Auth local persistence notice:", err);
+setPersistence(auth, browserSessionPersistence).catch((err) => {
+  console.warn("Auth session persistence notice:", err);
 });
 export const db = initializeFirestore(
   app,

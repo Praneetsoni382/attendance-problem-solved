@@ -54,7 +54,11 @@ export function saveLocalRegistry(registry: Record<string, StoredStudentAccount>
 
 export function getStoredActiveSession(): AppStudentUser | null {
   try {
-    const raw = localStorage.getItem(ACTIVE_SESSION_KEY) || sessionStorage.getItem(ACTIVE_SESSION_KEY);
+    const isSessionActive = sessionStorage.getItem("attendwise_session_active") === "true";
+    if (!isSessionActive) {
+      return null;
+    }
+    const raw = sessionStorage.getItem(ACTIVE_SESSION_KEY);
     return raw ? JSON.parse(raw) : null;
   } catch {
     return null;
@@ -64,15 +68,16 @@ export function getStoredActiveSession(): AppStudentUser | null {
 export function setStoredActiveSession(user: AppStudentUser | null): void {
   try {
     if (user) {
-      localStorage.setItem(ACTIVE_SESSION_KEY, JSON.stringify(user));
       sessionStorage.setItem(ACTIVE_SESSION_KEY, JSON.stringify(user));
-      localStorage.setItem("attendwise_session_active", "true");
       sessionStorage.setItem("attendwise_session_active", "true");
-    } else {
+      // Clean up permanent localStorage session flags so fresh browser visits always land on the landing page
       localStorage.removeItem(ACTIVE_SESSION_KEY);
-      sessionStorage.removeItem(ACTIVE_SESSION_KEY);
       localStorage.removeItem("attendwise_session_active");
+    } else {
+      sessionStorage.removeItem(ACTIVE_SESSION_KEY);
       sessionStorage.removeItem("attendwise_session_active");
+      localStorage.removeItem(ACTIVE_SESSION_KEY);
+      localStorage.removeItem("attendwise_session_active");
     }
   } catch (err) {
     console.warn("Failed to set active session:", err);

@@ -5065,21 +5065,37 @@ export default function App() {
 
   // Listen to Firebase Auth state
   useEffect(() => {
-    const sessionActive =
-      localStorage.getItem("attendwise_session_active") ||
-      sessionStorage.getItem("attendwise_session_active");
+    // A fresh browser visit (e.g. after closing or shutting off the browser) has no sessionStorage active flag
+    const isSessionActive = sessionStorage.getItem("attendwise_session_active") === "true";
+
+    // Clean up any stale permanent session keys in localStorage
+    localStorage.removeItem("attendwise_session_active");
+    localStorage.removeItem("attendwise_active_student_session_v2");
+
+    // On fresh visits: do not automatically log into the last session; direct student to landing page
+    if (!isSessionActive) {
+      if (auth.currentUser) {
+        logOutStudent().catch(() => {});
+      }
+      setUser(null);
+      setAuthLoading(false);
+      return;
+    }
 
     const unsubscribe = auth.onAuthStateChanged(async (currentUser) => {
+      // Confirm that the current tab still has an active session
+      if (sessionStorage.getItem("attendwise_session_active") !== "true") {
+        setUser(null);
+        setAuthLoading(false);
+        return;
+      }
+
       if (currentUser) {
-        localStorage.setItem("attendwise_session_active", "true");
-        sessionStorage.setItem("attendwise_session_active", "true");
         setUser((prev) => (prev?.uid === currentUser.uid ? prev : currentUser));
       } else {
-        // If not in Firebase Auth, check local student session
+        // If not in Firebase Auth, check local student session in current browser session
         const localActive = getStoredActiveSession();
-        if (localActive && sessionActive) {
-          localStorage.setItem("attendwise_session_active", "true");
-          sessionStorage.setItem("attendwise_session_active", "true");
+        if (localActive) {
           setUser((prev) => (prev?.uid === localActive.uid ? prev : localActive));
         } else {
           setUser(null);
@@ -5769,8 +5785,8 @@ export default function App() {
 
   if (!user) {
     return <LandingPage onAuthSuccess={(loggedInUser) => {
-      localStorage.setItem("attendwise_session_active", "true");
       sessionStorage.setItem("attendwise_session_active", "true");
+      localStorage.removeItem("attendwise_session_active");
       const active = loggedInUser || auth.currentUser || getStoredActiveSession();
       if (active) {
         setUser(active);
